@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bullet-app"
+version = "0.1.0"
+description = "Main Bullet application: live camera to red-target bounding boxes"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["bullet-msgs", "los-tracking", "numpy>=2,<3", "opencv-python>=4.10,<5", "pyzmq>=27,<28", "jsonschema>=4,<5"]
+
+[project.scripts]
+bullet-app = "bullet_app.main:main"
+
+[dependency-groups]
+dev = ["pytest>=9,<10", "mcap-bagger"]
+
+[tool.uv.sources]
+bullet-msgs = { workspace = true }
+los-tracking = { workspace = true }
+mcap-bagger = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
