@@ -1,6 +1,7 @@
 """Sensor-only, deterministic takeoff/settle/LOS mission; sockets live in runtime."""
 from dataclasses import asdict
 from copy import deepcopy
+from collections import deque
 from bullet_msgs.scenario import validate_end
 from bullet_msgs.spawn import DEFAULT_TAKEOFF_HEIGHT_M
 from math import isclose, radians
@@ -16,6 +17,11 @@ from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_
 
 TAKEOFF_HEIGHT_M = DEFAULT_TAKEOFF_HEIGHT_M
 HOVER_DURATION_S = 3.0
+SETTLING_WINDOW_S = 1.0
+SETTLING_MIN_SAMPLES = 3
+# One second at the supported 240 Hz physics rate, including the boundary sample.
+SETTLING_HISTORY_CAPACITY = 241
+TIME_EPSILON_S = 1e-9
 TARGET_CHECK_DURATION_S = 0.1
 TAKEOFF_TIMEOUT_S = 60.0
 ALTITUDE_TOLERANCE_M = 0.25
@@ -57,6 +63,7 @@ class Mission:
         self.arm_sequence = None
         self.running_seen = False
         self.relative_altitude = self.vertical_speed = None
+        self._settling_altitudes = deque(maxlen=SETTLING_HISTORY_CAPACITY)
 
     def configure(self, platform):
         validate_config(platform)
@@ -102,6 +109,16 @@ class Mission:
                      BarometerSample(source['stream_id'], source['step_index'], timestamp, feedback['barometer_altitude_m']))
         self.last_input = NavigationInput(attitude=attitude, barometer=barometer)
         self.hold.observe(self.last_input)
+        samples = self._settling_altitudes
+        sim = source['simulation_time_s']
+        if barometer is None:
+            samples.clear()
+        else:
+            if samples and not 0 < sim - samples[-1][0] <= self.config.tuning.max_barometer_age_s:
+                samples.clear()
+            samples.append((sim, barometer.altitude_m))
+            while len(samples) > 2 and samples[1][0] <= sim - SETTLING_WINDOW_S:
+                samples.popleft()
         self.search.observe(euler(attitude.orientation_xyzw)[2], source["simulation_time_s"])
         if self.datum is None and barometer is not None:
             self.datum = barometer.altitude_m
@@ -189,14 +206,28 @@ class Mission:
         return dict(schema_version=1, physics_id=source['physics_id'], episode_id=source['episode_id'], app_id=self.app_id,
                     sequence=self.sequence, issued_us=now_us, valid_until_us=now_us + lifetime_us, active=active, channels=channels)
 
+    def _settling_motion(self):
+        samples = self._settling_altitudes
+        span = samples[-1][0] - samples[0][0] if samples else 0.0
+        if len(samples) < SETTLING_MIN_SAMPLES or span < SETTLING_WINDOW_S - TIME_EPSILON_S:
+            return None, span
+        origin = samples[0][0]
+        mean_time = sum(time - origin for time, _ in samples) / len(samples)
+        mean_altitude = sum(altitude for _, altitude in samples) / len(samples)
+        covariance = sum((time - origin - mean_time) * (altitude - mean_altitude)
+                         for time, altitude in samples)
+        variance = sum((time - origin - mean_time) ** 2 for time, _ in samples)
+        return covariance / variance, span
+
     def _hold_tick(self, now_s, detection):
         sim = self.feedback['source']['simulation_time_s']
         now_us = int(now_s * 1e6)
         altitude, vz = self.hold.estimate(now_s)
         self.relative_altitude, self.vertical_speed = altitude - self.datum, vz
+        settling_vz, settling_window = self._settling_motion()
         roll, pitch, yaw = euler(self.last_input.attitude.orientation_xyzw)
         level = (abs(altitude - self.goal) <= ALTITUDE_TOLERANCE_M
-                 and abs(vz) <= VERTICAL_SPEED_TOLERANCE_M_S
+                 and settling_vz is not None and abs(settling_vz) <= VERTICAL_SPEED_TOLERANCE_M_S
                  and max(abs(roll), abs(pitch)) <= ATTITUDE_TOLERANCE_RAD)
         if self.phase in ('TAKEOFF', 'HOVER'):
             settled = level and abs(wrap(yaw - self.hold.heading_rad)) <= ATTITUDE_TOLERANCE_RAD
@@ -268,7 +299,9 @@ class Mission:
 
         command = self.hold.command(now_s=now_s, target_altitude_m=self.goal,
                                    yaw_rate_rad_s=yaw_reference)
-        self.diagnostics = {**self.hold.control.last_diagnostics, **vision}
+        self.diagnostics = {**self.hold.control.last_diagnostics, **vision,
+                            'settling_vertical_speed_m_s': settling_vz,
+                            'settling_window_s': settling_window}
         if self.search.started_sim is not None:
             self.diagnostics.update(self.search.diagnostics(sim, rotating=self.phase == 'YAW_SEARCH',
                                                             commanded_yaw_rate_rad_s=yaw_reference or 0.))

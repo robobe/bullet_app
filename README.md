@@ -110,7 +110,7 @@ and settle before LOS. The app first sends
 disarmed Angle frames so grounded physics produces sensor samples, then waits for applied
 arming confirmation. It climbs 20 m above the initial barometer reading with a
 1 m/s vertical reference limit. Hover requires altitude error <=0.25 m,
-|vertical speed| <=0.2 m/s and roll/pitch/heading errors <=5 degrees continuously
+|settling trend speed| <=0.2 m/s and roll/pitch/heading errors <=5 degrees continuously
 for 3 simulation seconds; deviations restart the countdown. Takeoff/settling has
 a 60 simulation second deadline. After hover, only a bbox captured after hover
 completion can start LOS. If absent after a fresh frame check (at most 100 ms),
@@ -293,3 +293,32 @@ The app consumes the supplied quaternion through the existing attitude path; it
 does not run another filter or add noise. Configure sensor noise, filter gains
 and pose sources in the physics runner's YAML, passed with `--config`. See
 [sensor pose configuration](../bullet_drone/docs/design/sensors.md#sensor-pose-selection-and-attitude-estimation).
+
+### Noise-tolerant hover confirmation
+
+Hover and centered-yaw settling use a one-second linear trend of fresh barometer
+altitude readings for their vertical-motion check. The trend must remain within
++/-0.2 m/s, alongside the existing +/-0.25 m estimated-altitude and +/-5 degree
+attitude/heading limits. Hover still requires three continuous simulation seconds;
+centered-yaw settling still requires 0.3 seconds and its existing yaw-rate limit.
+An unavailable trend prevents confirmation; any failed condition resets the dwell.
+
+The history is bounded to 241 readings and retains the boundary sample covering
+one second. It uses source simulation timestamps, requires at least three samples
+spanning the full window, ignores duplicate feedback and restarts on missing
+barometer readings, nonincreasing simulation time or gaps exceeding the barometer
+freshness limit. Accepted source/episode changes clear it with the mission state.
+Foreign feedback is still ignored. Repeating a control tick cannot manufacture
+new measurements or advance simulation-time dwell.
+
+Mission hold diagnostics expose `settling_vertical_speed_m_s` (null until ready)
+and `settling_window_s`. The existing top-level `vertical_speed_m_s` remains the
+controller's instantaneous estimate. The controller and LOS handoff continue to
+use that original estimate; this change affects transition decisions only.
+
+The trend window is a fixed app constant, not an additional YAML setting. It
+estimates average motion and introduces up to about one second of response lag;
+it does not guarantee instantaneous stability. Regression checks include real
+physics with the current noisy/filtered YAML and a synthetic camera, plus motion,
+excursion, reset and duplicate/missing-sample cases. Hardware and full renderer
+flight validation were not performed.

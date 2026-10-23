@@ -65,16 +65,26 @@ def test_profile_mismatch_refuses_readiness():
 
 
 @pytest.mark.parametrize('target_found', [False, True])
-def test_sensor_only_physics_takeoff_hover_yaw_search(target_found):
+@pytest.mark.parametrize('noisy_profile', [False, True], ids=['ideal', 'noisy_filtered'])
+def test_sensor_only_physics_takeoff_hover_yaw_search(target_found, noisy_profile):
+    from dataclasses import replace
     from bullet_drone.config import DroneSettings, SimulationConfig, SimulationSettings
+    from bullet_drone.config import YamlConfigLoader
     from bullet_drone.commands import RcInput
     from bullet_drone.controllers import InternalControlSettings, PidSettings
     from bullet_drone.simulation import RcSimulation
+    from bullet_drone.pose import resolve_pose
     m = mission()
     inner = InternalControlSettings((4., 4., 4.), (2., 2., 2.),
                                     (PidSettings(kp=.05, ki=0., kd=0., output_limit=.1, integral_limit=0.),) * 3)
-    sim = RcSimulation(SimulationConfig(SimulationSettings(1 / 240, 20000, (0., 0., -9.81), gui=False),
-                                        DroneSettings(1., (0., 0., .015))), inner)
+    config = SimulationConfig(SimulationSettings(1 / 240, 20000, (0., 0., -9.81), gui=False),
+                              DroneSettings(1., (0., 0., .015)))
+    if noisy_profile:
+        config = YamlConfigLoader().load(ROOT / 'bullet_drone/configs/basic.yaml')
+        config = replace(config, simulation=replace(config.simulation, gui=False))
+        assert config.sensors.barometer.filter_enabled and config.sensors.barometer.pressure_stddev_pa > 0
+        m.configure(dict(platform(m.config), attitude_model='imu_complementary'))
+    sim = RcSimulation(config, inner)
     phases = set()
     rc = None
     detection = None
@@ -90,17 +100,18 @@ def test_sensor_only_physics_takeoff_hover_yaw_search(target_found):
                 break
             obs = sim.step(RcInput(tuple(rc['channels'])))
             if step % 2 == 0:
-                # Only noisy sensor altitude and explicitly ideal attitude cross the boundary.
+                pose = resolve_pose(obs, config.pose_sources)
+                # Feedback and camera use the same configured sensor pose as the runner.
                 f = feedback(step, 1000 + step / 240, obs.sensors.barometer.altitude_m,
                              armed=rc['channels'][4] >= 1500, applied=rc['sequence'])
-                f['orientation_xyzw'] = list(obs.ground_truth.orientation_xyzw)
+                f['orientation_xyzw'] = list(pose.orientation_xyzw)
                 m.observe(f)
                 if target_found:
                     # Test scene projects a fixed box behind the spawn. Only bbox and
                     # sensor packets enter the mission; truth is used by this camera fixture.
                     from los_tracking.geometry import rotate
-                    q = obs.ground_truth.orientation_xyzw
-                    position = obs.ground_truth.position_m
+                    q = pose.orientation_xyzw
+                    position = pose.position_m
                     bx, by, bz = rotate((-q[0], -q[1], -q[2], q[3]),
                                         (-50. - position[0], -position[1], 2. - position[2]))
                     bbox = None
@@ -112,7 +123,7 @@ def test_sensor_only_physics_takeoff_hover_yaw_search(target_found):
                         if right > left and bottom > top:
                             bbox = (left, top, right - left, bottom - top)
                     detection = (dict(sequence=step, source=dict(f['source'])), bbox)
-        assert {'SENSOR_WARMUP', 'ARMING', 'TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH'} <= phases
+        assert {'SENSOR_WARMUP', 'ARMING', 'TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH'} <= phases, (m.phase, m.reason)
         if target_found:
             assert {'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'} <= phases, (m.phase, m.reason)
             from math import degrees
