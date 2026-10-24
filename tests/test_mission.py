@@ -276,3 +276,14 @@ def test_complementary_attitude_feedback_reaches_navigation():
     assert m.last_input.attitude.orientation_xyzw == pytest.approx(q)
     assert m.last_input.barometer.altitude_m == 4.
     assert m.last_input.attitude.timestamp_s == 1000.
+
+
+def test_status_records_explicit_takeoff_goal_and_barometer_datum():
+    m=mission()
+    reading=feedback(0,1000.,4.,state='stopped')
+    reading.update(schema_version=2,takeoff_height_m=6.)
+    m.observe(reading)
+    d=m.status(1000.)['diagnostics']
+    assert d['barometer_datum_m']==4.
+    assert d['takeoff_goal_altitude_m']==10.
+    assert m.goal==10.  # Recording the reference does not change control state.

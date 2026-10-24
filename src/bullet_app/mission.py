@@ -10,7 +10,7 @@ from uuid import uuid4
 from bullet_msgs.flight import validate_config, validate_feedback, COMMAND_LIFETIME_US
 from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample, BarometerSample,
                           LosNavigator, NavigationInput, RcChannels, State, TargetObservation)
-from los_tracking.geometry import euler, wrap, world_bearing
+from los_tracking.geometry import euler, wrap, world_bearing, box_edges
 from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_DURATION_S,
                      YAW_SETTLE_RATE_RAD_S, TARGET_CENTER_TOLERANCE_PX, centering_command, ANGLE_EPSILON_RAD)
 
@@ -324,6 +324,10 @@ class Mission:
         if target.bbox is None:
             diagnostics['vision_reason'] = 'no_target'
             return None, diagnostics
+        margins, edges = box_edges(target.bbox, camera)
+        diagnostics.update(processed_image_stream_id=target.stream_id,
+                           processed_image_sequence=target.sequence, processed_image_timestamp_s=target.timestamp_s,
+                           processed_bbox=target.bbox, edge_margins_px=margins, touched_edges=edges)
         x, y, width, height = target.bbox
         if x <= 0 or y <= 0 or x + width >= camera.width_px or y + height >= camera.height_px:
             diagnostics['vision_reason'] = 'clipped_target'
@@ -365,6 +369,7 @@ class Mission:
                     target_remaining_s=(max(0., TARGET_CHECK_DURATION_S - (sim - self.hover_completed_sim))
                                         if self.phase == 'WAIT_TARGET' else 0.),
                     navigator_state=None if self.nav_result is None else self.nav_result.state.value,
-                    diagnostics={**self.diagnostics, 'physics_state': self.feedback['state'],
+                    diagnostics={**self.diagnostics, 'takeoff_goal_altitude_m': self.goal,
+                                 'barometer_datum_m': self.datum, 'physics_state': self.feedback['state'],
                                  'physics_reason': self.feedback['reason'],
                                  'acquisition_timeout_s': self.config.tuning.acquisition_timeout_s})

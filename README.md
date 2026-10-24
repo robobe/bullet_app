@@ -322,3 +322,21 @@ it does not guarantee instantaneous stability. Regression checks include real
 physics with the current noisy/filtered YAML and a synthetic camera, plus motion,
 excursion, reset and duplicate/missing-sample cases. Hardware and full renderer
 flight validation were not performed.
+
+## Recorded flight diagnostics
+
+The standard workspace launcher records MCAP and separate process logs automatically.
+Mission diagnostics now identify the visual input actually processed by navigation
+(stream, frame sequence, capture time, bbox), signed left/top/right/bottom edge
+clearances in pixels, and touched edges. The existing `clipped_target` policy is
+unchanged. Latest detected-frame metadata is separate from processed-frame identity;
+its end-to-end vision processing latency uses the shared host monotonic clock.
+App configuration snapshots repeat on `analysis/app/config` with source identity,
+resolved camera/vehicle/tuning values and source revisions. Worker exceptions retain
+tracebacks in the app process log. Offline MCAP reports live in the sibling
+`mcap_bagger` package; ground-truth analysis topics never enter mission feedback.
+
+Mission diagnostics expose optional `takeoff_goal_altitude_m` and
+`barometer_datum_m` snapshots for FlightLens. These are the initialized controller
+reference and sensor datum, not a new control input. Older recordings lacking
+these fields remain readable and show the takeoff goal as unavailable.

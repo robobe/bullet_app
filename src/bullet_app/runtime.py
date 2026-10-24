@@ -1,5 +1,9 @@
 """Dedicated mission and vision threads; OpenCV UI stays on the main thread."""
 import json
+from dataclasses import asdict
+from pathlib import Path
+import traceback
+from bullet_msgs.provenance import revisions
 from threading import Event, Lock, Thread
 import time
 
@@ -43,6 +47,7 @@ class MissionRuntime:
         try:
             target()
         except Exception as error:
+            traceback.print_exc()
             self.error = f'{target.__name__}: {error}'
             self.stop.set()
 
@@ -56,6 +61,7 @@ class MissionRuntime:
                     continue
                 metadata, image = result
                 bbox = detect_red_box(image)
+                metadata = dict(metadata, processing_completed_us=time.monotonic_ns() // 1000)
                 with self.lock:
                     self.latest_vision = (metadata, bbox)
                     self.display = (image, bbox)
@@ -80,6 +86,8 @@ class MissionRuntime:
                 commands.bind(self.transport['flight_command_endpoint'])
                 publisher = BboxPublisher(self.bbox_endpoint)
                 los_telemetry = LosTelemetryPublisher(publisher.socket)
+                source_revisions = revisions(Path(__file__).resolve().parents[3])
+                next_snapshot = 0.
                 last_config = float('-inf')
                 last_bbox = None
                 next_tick = time.monotonic()
@@ -127,6 +135,15 @@ class MissionRuntime:
                         los_telemetry.publish(mission, now_s=now)
                         status = mission.status(now)
                         if status is not None:
+                            if detection is not None:
+                                metadata, bbox = detection
+                                status['diagnostics']['latest_image'] = {key: metadata[key] for key in ('session', 'sequence', 'capture_ns', 'source', 'processing_completed_us') if key in metadata}
+                                status['diagnostics']['vision_processing_latency_s'] = (metadata.get('processing_completed_us', round(now * 1e6)) - metadata['capture_ns'] / 1000) / 1e6
+                            if now >= next_snapshot:
+                                snapshot = dict(schema_version=1, source=mission.feedback['source'], role='app',
+                                                settings=asdict(self.config), revisions=source_revisions)
+                                publisher.socket.send_multipart([b'analysis/app/config', json.dumps(snapshot, allow_nan=False).encode()], zmq.NOBLOCK)
+                                next_snapshot = now + 1.
                             publisher.socket.send_multipart([MISSION_TOPIC, json.dumps(status, allow_nan=False).encode()], zmq.NOBLOCK)
                             with self.lock:
                                 self.status = status
