@@ -340,3 +340,42 @@ Mission diagnostics expose optional `takeoff_goal_altitude_m` and
 `barometer_datum_m` snapshots for FlightLens. These are the initialized controller
 reference and sensor datum, not a new control input. Older recordings lacking
 these fields remain readable and show the takeoff goal as unavailable.
+
+## MCAP output directory
+
+The standard **Bullet: Run all** launcher reads
+[`configs/app.json`](configs/app.json):
+
+```json
+{
+  "recording": {
+    "output_dir": "../../recordings"
+  }
+}
+```
+
+`recording.output_dir` is the directory for **future MCAP files**. It must be a
+nonempty path string. Absolute paths are accepted; relative paths resolve beside
+`app.json`, regardless of the launch working directory. `~` expands to the user's
+home directory. The supplied value saves MCAPs in the shared workspace recordings directory.
+Malformed JSON, unknown/missing fields and invalid values stop launch.
+
+For one run, from `bullet_render`, override the directory:
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python tools/run_flight.py \
+  --mcap-output-dir /data/flights
+```
+
+Use `--app-config /path/to/app.json` to select another configuration file. The
+CLI directory takes precedence and resolves relative paths from the launch
+working directory. These options belong to the launcher, which supervises the
+recorder; starting `bullet-app` alone continues without starting a recorder.
+
+The recorder creates a missing directory and tests a temporary write before
+signalling readiness. A path/write failure stops launch before Godot, physics
+and the flight app start. The effective directory is printed at startup.
+Automatic filenames and one MCAP per flight are preserved. Existing recordings
+are not moved, configuration files are not rewritten, and changing the setting
+requires a new launch. Process logs stay in
+`bullet_render/recordings/launch_<UTC>/`.
