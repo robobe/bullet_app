@@ -1,5 +1,6 @@
 """Deterministic measured search, qualification, braking and LOS handoff."""
 from math import cos, sin, radians, degrees
+from types import SimpleNamespace
 
 import pytest
 from bullet_app.search import YawSearch
@@ -86,6 +87,23 @@ def test_unaligned_target_never_stops_scan():
     m.observe(f)
     m.tick(now_s=now + .002, detection=(metadata, (300, 250, 25, 25)))
     assert m.phase == 'YAW_SEARCH' and m.diagnostics['vision_reason'] == 'attitude_unaligned'
+
+
+def test_betaflight_aligns_image_across_recorded_attitude_gap():
+    m = mission()
+    m.configure(dict(m.platform, schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
+    m.observe(feedback(1, 1000., 20., armed=True))
+    status = SimpleNamespace(armed=True, arming_disabled_flags=0)
+    for sequence, timestamp in enumerate((1000., 1000.108), 1):
+        m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=timestamp),
+                             SimpleNamespace(altitude_m=20., vertical_speed_m_s=0., received_at=timestamp), status))
+    m.hover_completed_us = int(999.9e6)
+    source = dict(m.feedback['source'], measurement_us=int(1000.054e6))
+
+    candidate, diagnostics = m._search_target((dict(sequence=1, source=source), (300, 250, 25, 25)), 1000.109)
+
+    assert candidate is not None
+    assert diagnostics['vision_reason'] == 'usable'
 
 
 def test_candidate_loss_resumes_same_sweep_and_heading_handoff_is_continuous():

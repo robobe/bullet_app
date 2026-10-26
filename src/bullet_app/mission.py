@@ -26,6 +26,7 @@ TIME_EPSILON_S = 1e-9
 TARGET_CHECK_DURATION_S = 0.1
 TAKEOFF_TIMEOUT_S = 60.0
 ALTITUDE_TOLERANCE_M = 0.25
+BETAFLIGHT_ALTITUDE_TOLERANCE_M = 0.5
 VERTICAL_SPEED_TOLERANCE_M_S = 0.2
 ATTITUDE_TOLERANCE_RAD = radians(5)
 FEEDBACK_TIMEOUT_S = 0.1
@@ -212,7 +213,12 @@ class Mission:
                 if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
                     armed = True
                     if not self.hold.ready(now_s):
-                        self.fail('sensors_stale')
+                        attitude = self.last_input.attitude
+                        attitude_age = None if attitude is None else now_s - attitude.timestamp_s
+                        if attitude_age is None or not 0 <= attitude_age <= self.config.tuning.max_attitude_age_s:
+                            self.fail('attitude_stale')
+                        else:
+                            self.fail('barometer_stale')
                     elif self.phase.startswith('LOS_'):
                         target = self._target(detection, now_s)
                         result = self.navigator.update(NavigationInput(attitude=self.last_input.attitude,
@@ -268,7 +274,10 @@ class Mission:
         self.relative_altitude, self.vertical_speed = altitude - self.datum, vz
         settling_vz, settling_window = self._settling_motion()
         roll, pitch, yaw = euler(self.last_input.attitude.orientation_xyzw)
-        level = (abs(altitude - self.goal) <= ALTITUDE_TOLERANCE_M
+        altitude_tolerance = (BETAFLIGHT_ALTITUDE_TOLERANCE_M
+                              if self.platform.get('backend') == 'betaflight'
+                              else ALTITUDE_TOLERANCE_M)
+        level = (abs(altitude - self.goal) <= altitude_tolerance
                  and settling_vz is not None and abs(settling_vz) <= VERTICAL_SPEED_TOLERANCE_M_S
                  and max(abs(roll), abs(pitch)) <= ATTITUDE_TOLERANCE_RAD)
         if self.phase in ('TAKEOFF', 'HOVER'):

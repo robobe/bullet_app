@@ -105,6 +105,48 @@ def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
     assert m.phase == 'TAKEOFF'
 
 
+def test_betaflight_tolerates_recorded_msp_delay():
+    config = NavigatorConfig.from_json(PROFILE)
+    m = Mission(config, app_id='app')
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
+    samples = [(999.89 + index / 100, 999.89 + index / 100) for index in range(11)] + [(1000., 1000.02)]
+    for step, (attitude_at, altitude_at) in enumerate(samples, 1):
+        m.observe(feedback(step, altitude_at, 0., armed=True))
+        m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=attitude_at),
+                             SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=altitude_at),
+                             SimpleNamespace(armed=True, arming_disabled_flags=0)))
+    m.phase, m.running_seen, m.started_sim = 'TAKEOFF', True, 0.
+    m.observe(feedback(13, 1000.151, 0., armed=True))
+
+    command = m.tick(now_s=1000.151)
+
+    assert m.phase == 'TAKEOFF', m.reason
+    assert command['active']
+
+
+@pytest.mark.parametrize(('attitude_at', 'altitude_at', 'now', 'reason'), [
+    (1000., 1000.19, 1000.21, 'attitude_stale'),
+    (1000.20, 1000., 1000.21, 'barometer_stale'),
+])
+def test_betaflight_reports_the_stale_sensor(attitude_at, altitude_at, now, reason):
+    config = NavigatorConfig.from_json(PROFILE)
+    m = Mission(config, app_id='app')
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
+    for step in range(1, 13):
+        offset = (step - 12) / 100
+        m.observe(feedback(step, min(attitude_at, altitude_at) + offset, 0., armed=True))
+        m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=attitude_at + offset),
+                             SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=altitude_at + offset),
+                             SimpleNamespace(armed=True, arming_disabled_flags=0)))
+    m.phase, m.running_seen, m.started_sim = 'TAKEOFF', True, 0.
+    m.observe(feedback(13, now, 0., armed=True))
+
+    command = m.tick(now_s=now)
+
+    assert m.phase == 'FAULT' and m.reason == reason
+    assert not command['active']
+
+
 @pytest.mark.parametrize('target_found', [False, True])
 @pytest.mark.parametrize('noisy_profile', [False, True], ids=['ideal', 'noisy_filtered'])
 def test_sensor_only_physics_takeoff_hover_yaw_search(target_found, noisy_profile):

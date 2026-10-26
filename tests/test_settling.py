@@ -51,6 +51,32 @@ def test_sustained_motion_resets_dwell_inside_altitude_envelope(rate):
     assert m.phase == 'TAKEOFF' and m.settled_sim is None
 
 
+@pytest.mark.parametrize(('backend', 'altitude', 'settles'), [
+    (None, 21.2, False),
+    ('betaflight', 21.2, True),
+])
+def test_betaflight_allows_wider_takeoff_hover_altitude_envelope(backend, altitude, settles):
+    m = ready_hover()
+    samples = list(m._settling_altitudes)
+    m._settling_altitudes.clear()
+    if backend:
+        m.configure(dict(m.platform, schema_version=2, backend=backend, attitude_model='betaflight_imu'))
+    step = 481
+    now = 1000 + step / 240
+    if backend:
+        m._settling_altitudes.extend((now - (len(samples) - 1 - index) / 240, altitude)
+                                     for index in range(len(samples)))
+        m.observe(feedback(step, now, 0., armed=True))
+        m.observe_estimates((Mock(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=now),
+                             Mock(altitude_m=altitude, vertical_speed_m_s=0., received_at=now),
+                             Mock(armed=True, arming_disabled_flags=0)))
+    else:
+        m._settling_altitudes.extend((time, altitude) for time, _ in samples)
+        m.observe(feedback(step, now, altitude, armed=True))
+    m.tick(now_s=now)
+    assert (m.phase == 'HOVER') is settles
+
+
 @pytest.mark.parametrize('axis', ['altitude', 'roll', 'pitch', 'heading'])
 def test_altitude_and_attitude_excursions_still_reset_dwell(axis):
     m = ready_hover()

@@ -109,7 +109,8 @@ A target already visible after hover skips the blind scan but must still center
 and settle before LOS. The app first sends
 disarmed Angle frames so grounded physics produces sensor samples, then waits for applied
 arming confirmation. It climbs 20 m above the initial barometer reading with a
-1 m/s vertical reference limit. Hover requires altitude error <=0.25 m,
+1 m/s vertical reference limit. Hover requires altitude error <=0.25 m
+(<=0.5 m with Betaflight),
 |settling trend speed| <=0.2 m/s and roll/pitch/heading errors <=5 degrees continuously
 for 3 simulation seconds; deviations restart the countdown. Takeoff/settling has
 a 60 simulation second deadline. After hover, only a bbox captured after hover

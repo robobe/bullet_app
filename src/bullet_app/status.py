@@ -20,6 +20,8 @@ REASON_MESSAGES = {
     'association_jump': 'target bearing jumped too far between images',
     'vertical_warmup': 'waiting for altitude and vertical-speed estimates',
     'feedback_stale': 'physics feedback is too old',
+    'attitude_stale': 'attitude sample is too old',
+    'barometer_stale': 'barometer altitude sample is too old',
     'sensors_stale': 'attitude or altitude samples are too old',
     'rc_expired': 'no valid RC command arrived before its deadline',
     'app_withdrawn': 'the app withdrew RC control',

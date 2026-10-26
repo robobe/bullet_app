@@ -7,7 +7,7 @@ from msp_link import Client, FlightCommands, TcpTransport, MspError
 from los_tracking import AttitudeSample, BarometerSample
 
 ATTITUDE_PERIOD_S = .01
-ALTITUDE_PERIOD_S = .02
+ALTITUDE_PERIOD_S = .05
 STATUS_PERIOD_S = .1
 STALE_S = .2
 DISARMED = (1500, 1500, 1000, 1500, 1000, 2000) + (1000,) * 12
