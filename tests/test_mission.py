@@ -1,6 +1,7 @@
 """Mission transitions and a real sensor-only PyBullet takeoff."""
 from pathlib import Path
 from math import radians
+from types import SimpleNamespace
 
 import pytest
 from bullet_app.mission import Mission
@@ -15,7 +16,7 @@ def platform(config):
     v, c = config.vehicle, config.camera
     return dict(schema_version=1, physics_id='physics', stream_id='stream',
                 mass_kg=v.mass_kg, gravity_m_s2=v.gravity_m_s2, max_thrust_n=v.max_thrust_n,
-                rc_angle_scale_rad=v.rc_angle_scale_rad, rc_yaw_rate_scale_rad_s=v.rc_yaw_rate_scale_rad_s,
+                rc_angle_scale_rad=0.7853981633974483, rc_yaw_rate_scale_rad_s=2.0,
                 aetr_channels=[1, 2, 3, 4], arm_channel=5, mode_channel=6,
                 camera=dict(width_px=c.width_px, height_px=c.height_px, fov_x_deg=90.),
                 attitude_model='ideal', physics_hz=240, feedback_hz=120, command_hz=100)
@@ -64,11 +65,51 @@ def test_profile_mismatch_refuses_readiness():
         m.configure(config)
 
 
+def test_betaflight_stopped_readiness_uses_true_rc_minimum():
+    config = NavigatorConfig.from_json(PROFILE)
+    m = Mission(config, app_id='app')
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
+    m.observe(feedback(0, 1000., 0., state='stopped'))
+    command = m.tick(now_s=1000.)
+    assert not command['active'] and command['channels'][2] == 1000 and command['channels'][4] == 1000
+
+
+def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
+    config = NavigatorConfig.from_json(PROFILE)
+    m = Mission(config, app_id='app')
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
+    command = None
+    for step in range(30):
+        now = 1000. + step / 100
+        m.observe(feedback(step, now, 0., armed=False, applied=0))
+        m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=now),
+                             SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=now),
+                             SimpleNamespace(armed=False, arming_disabled_flags=512)))
+        command = m.tick(now_s=now)
+        if m.phase == 'ARMING':
+            break
+    assert m.phase == 'ARMING' and command['channels'][4] == 1000
+    now += .01
+    m.observe(feedback(step + 1, now, 0., armed=False, applied=command['sequence']))
+    m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=now),
+                         SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=now),
+                         SimpleNamespace(armed=False, arming_disabled_flags=0)))
+    arm = m.tick(now_s=now)
+    assert arm['channels'][4] == 2000
+    now += .01
+    m.observe(feedback(step + 2, now, 0., armed=False, applied=arm['sequence']))
+    m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=now),
+                         SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=now),
+                         SimpleNamespace(armed=True, arming_disabled_flags=0)))
+    m.tick(now_s=now)
+    assert m.phase == 'TAKEOFF'
+
+
 @pytest.mark.parametrize('target_found', [False, True])
 @pytest.mark.parametrize('noisy_profile', [False, True], ids=['ideal', 'noisy_filtered'])
 def test_sensor_only_physics_takeoff_hover_yaw_search(target_found, noisy_profile):
     from dataclasses import replace
-    from bullet_drone.config import DroneSettings, SimulationConfig, SimulationSettings
+    from bullet_drone.config import ControlSettings, DroneSettings, SimulationConfig, SimulationSettings
     from bullet_drone.config import YamlConfigLoader
     from bullet_drone.commands import RcInput
     from bullet_drone.controllers import InternalControlSettings, PidSettings
@@ -81,7 +122,7 @@ def test_sensor_only_physics_takeoff_hover_yaw_search(target_found, noisy_profil
                               DroneSettings(1., (0., 0., .015)))
     if noisy_profile:
         config = YamlConfigLoader().load(ROOT / 'bullet_drone/configs/basic.yaml')
-        config = replace(config, simulation=replace(config.simulation, gui=False))
+        config = replace(config, simulation=replace(config.simulation, gui=False), control=ControlSettings())
         assert config.sensors.barometer.filter_enabled and config.sensors.barometer.pressure_stddev_pa > 0
         m.configure(dict(platform(m.config), attitude_model='imu_complementary'))
     sim = RcSimulation(config, inner)

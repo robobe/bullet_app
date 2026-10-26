@@ -73,6 +73,8 @@ class MissionRuntime:
         publisher = None
         last_command = None
         los_telemetry = None
+        msp = None
+        next_msp_telemetry = 0.
         try:
             with zmq.Context() as context, context.socket(zmq.SUB) as subscriber, context.socket(zmq.PUB) as commands:
                 for socket in (subscriber, commands):
@@ -104,6 +106,10 @@ class MissionRuntime:
                                 if parts[0] == CONFIG_TOPIC:
                                     platform = decode(parts[1], validate_config)
                                     mission.configure(platform)
+                                    if platform.get('backend') == 'betaflight' and msp is None:
+                                        from .msp_flight import MspFlight
+                                        msp = MspFlight()
+                                        msp.start()
                                     last_config = time.monotonic()
                                 elif parts[0] == END_TOPIC:
                                     mission.complete(decode(parts[1], validate_end))
@@ -124,6 +130,9 @@ class MissionRuntime:
                             detection = self.latest_vision
                         if now - last_config > CONFIG_TIMEOUT_S and mission.running_seen:
                             mission.fail('platform_stale')
+                        if msp is not None and mission.identity is not None:
+                            msp.set_episode(mission.identity)
+                            mission.observe_estimates(msp.snapshot())
                         command = mission.tick(now_s=now, detection=detection)
                         if command is not None and (now - last_config <= CONFIG_TIMEOUT_S or mission.feedback['state'] == 'running'):
                             if now - last_config > CONFIG_TIMEOUT_S:
@@ -132,6 +141,19 @@ class MissionRuntime:
                                 command['channels'][2] = 1000
                             commands.send_multipart([RC_TOPIC, encode(command, validate_rc)], zmq.NOBLOCK)
                             last_command = command
+                            if msp is not None:
+                                msp.update(command['channels'])
+                        if msp is not None and mission.feedback is not None and now >= next_msp_telemetry:
+                            from dataclasses import asdict as snapshot_dict
+                            snapshot = msp.snapshot()
+                            packet = dict(schema_version=1, source=mission.feedback['source'], backend='betaflight',
+                                timestamp_kind='host_receipt', firmware=msp.firmware, error=msp.error,
+                                rc_frames_sent=msp.client.rc.sent, last_rc_sent_at_s=msp.client.rc.last_sent_at,
+                                attitude=None if not snapshot or snapshot[0] is None else snapshot_dict(snapshot[0]),
+                                altitude=None if not snapshot or snapshot[1] is None else snapshot_dict(snapshot[1]),
+                                status=None if not snapshot or snapshot[2] is None else snapshot_dict(snapshot[2]))
+                            publisher.socket.send_multipart([b'analysis/app/msp', json.dumps(packet, allow_nan=False).encode()], zmq.NOBLOCK)
+                            next_msp_telemetry = now + .05
                         los_telemetry.publish(mission, now_s=now)
                         status = mission.status(now)
                         if status is not None:
@@ -167,6 +189,8 @@ class MissionRuntime:
                         last_command['channels'][2] = last_command['channels'][4] = 1000
                         commands.send_multipart([RC_TOPIC, encode(last_command, validate_rc)], zmq.NOBLOCK)
         finally:
+            if msp is not None:
+                msp.close()
             if publisher is not None:
                 publisher.close()
 

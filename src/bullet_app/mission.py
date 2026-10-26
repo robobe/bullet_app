@@ -9,8 +9,9 @@ from uuid import uuid4
 
 from bullet_msgs.flight import validate_config, validate_feedback, COMMAND_LIFETIME_US
 from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample, BarometerSample,
-                          LosNavigator, NavigationInput, RcChannels, State, TargetObservation)
+                          LosNavigator, NavigationInput, ControlDemand, State, TargetObservation)
 from los_tracking.geometry import euler, wrap, world_bearing, box_edges
+from .rc import encode_demand, ANGLE_SCALE_RAD, YAW_RATE_SCALE_RAD_S
 from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_DURATION_S,
                      YAW_SETTLE_RATE_RAD_S, TARGET_CENTER_TOLERANCE_PX, centering_command, ANGLE_EPSILON_RAD)
 
@@ -31,7 +32,7 @@ FEEDBACK_TIMEOUT_S = 0.1
 COMMAND_PERIOD_S = 0.01
 # Leave one tick for scheduling jitter and transport after the next control tick.
 COMMAND_HORIZON_S = 2 * COMMAND_PERIOD_S
-DISARMED_AETR = RcChannels(1500, 1500, 1000, 1500)
+DISARMED_AETR = ControlDemand(0., 0., 0., 0.)
 
 
 class Mission:
@@ -61,6 +62,7 @@ class Mission:
         self.search = YawSearch()
         self.los_started_us = None
         self.arm_sequence = None
+        self.arming_disabled_flags = None
         self.running_seen = False
         self.relative_altitude = self.vertical_speed = None
         self._settling_altitudes = deque(maxlen=SETTLING_HISTORY_CAPACITY)
@@ -69,7 +71,7 @@ class Mission:
         validate_config(platform)
         c, v = self.config.camera, self.config.vehicle
         expected = dict(mass_kg=v.mass_kg, gravity_m_s2=v.gravity_m_s2, max_thrust_n=v.max_thrust_n,
-                        rc_angle_scale_rad=v.rc_angle_scale_rad, rc_yaw_rate_scale_rad_s=v.rc_yaw_rate_scale_rad_s,
+                        rc_angle_scale_rad=ANGLE_SCALE_RAD, rc_yaw_rate_scale_rad_s=YAW_RATE_SCALE_RAD_S,
                         physics_hz=240, feedback_hz=120, command_hz=100)
         if any(not isclose(platform[k], value, rel_tol=1e-6) for k, value in expected.items()):
             raise ValueError('platform/control profile mismatch')
@@ -103,6 +105,8 @@ class Mission:
         if source['step_index'] == self.last_step:
             return
         self.last_step = source['step_index']
+        if self.platform.get('backend') == 'betaflight':
+            return
         timestamp = source['measurement_us'] / 1e6
         attitude = AttitudeSample(source['stream_id'], source['step_index'], timestamp, tuple(feedback['orientation_xyzw']))
         barometer = (None if feedback['barometer_altitude_m'] is None else
@@ -122,6 +126,32 @@ class Mission:
         self.search.observe(euler(attitude.orientation_xyzw)[2], source["simulation_time_s"])
         if self.datum is None and barometer is not None:
             self.datum = barometer.altitude_m
+            self.goal = self.datum + self.takeoff_height_m
+
+    def observe_estimates(self, snapshot):
+        """MSP measurements have individual receipt times, never physics sample stamps."""
+        if snapshot is None or self.feedback is None:
+            return
+        attitude, altitude, status = snapshot
+        if status is not None:
+            self.feedback = dict(self.feedback, armed=status.armed)
+            self.arming_disabled_flags = status.arming_disabled_flags
+        if attitude is None or altitude is None:
+            return
+        from .msp_flight import body_to_world
+        stream = self.feedback['source']['stream_id']
+        a = AttitudeSample(stream, round(attitude.received_at * 1e6), attitude.received_at,
+                           body_to_world(attitude.roll_rad, attitude.pitch_rad, attitude.yaw_rad))
+        b = BarometerSample(stream, round(altitude.received_at * 1e6), altitude.received_at, altitude.altitude_m)
+        self.last_input = NavigationInput(attitude=a, barometer=b)
+        self.hold.observe(self.last_input)
+        if not self._settling_altitudes or altitude.received_at > self._settling_altitudes[-1][0]:
+            self._settling_altitudes.append((altitude.received_at, altitude.altitude_m))
+            while len(self._settling_altitudes) > 2 and self._settling_altitudes[1][0] <= altitude.received_at - SETTLING_WINDOW_S:
+                self._settling_altitudes.popleft()
+        self.search.observe(euler(a.orientation_xyzw)[2], a.timestamp_s)
+        if self.datum is None:
+            self.datum = altitude.altitude_m
             self.goal = self.datum + self.takeoff_height_m
 
     def complete(self, result):
@@ -162,12 +192,23 @@ class Mission:
                 active = True
                 sim = source['simulation_time_s']
                 if self.phase == 'SENSOR_WARMUP' and self.hold.ready(now_s):
-                    self.phase, self.reason = 'ARMING', 'waiting_applied_arm'
-                    self.arm_sequence = self.sequence + 1
+                    self.phase = 'ARMING'
+                    self.reason = ('waiting_betaflight_prearm' if self.platform.get('backend') == 'betaflight'
+                                   else 'waiting_applied_arm')
                 if self.phase == 'ARMING':
-                    armed = True
-                    if f['armed'] and f['mode'] == 'angle' and f['last_applied_sequence'] >= self.arm_sequence:
-                        self.phase, self.reason = 'TAKEOFF', 'climbing'
+                    prearm_ready = (self.platform.get('backend') != 'betaflight'
+                                    or self.arming_disabled_flags == 0)
+                    if prearm_ready:
+                        armed = True
+                        self.reason = 'waiting_applied_arm'
+                        if self.arm_sequence is None:
+                            self.arm_sequence = self.sequence + 1
+                        if f['armed'] and f['mode'] == 'angle' and f['last_applied_sequence'] >= self.arm_sequence:
+                            self.phase, self.reason = 'TAKEOFF', 'climbing'
+                    else:
+                        armed = False
+                        self.arm_sequence = None
+                        self.reason = 'waiting_betaflight_prearm'
                 if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
                     armed = True
                     if not self.hold.ready(now_s):
@@ -201,7 +242,8 @@ class Mission:
         if lifetime_us <= 0:
             self.fail('command_expired')
             active, armed, command, lifetime_us = False, False, DISARMED_AETR, COMMAND_LIFETIME_US
-        channels = [*command.as_tuple(), 2000 if armed else 1000, 2000, *([1000] * 12)]
+        encoded = encode_demand(command, self.config, backend=self.platform.get("backend", "internal"))
+        channels = [*encoded.as_tuple(), 2000 if armed else 1000, 2000, *([1000] * 12)]
         self.sequence += 1
         return dict(schema_version=1, physics_id=source['physics_id'], episode_id=source['episode_id'], app_id=self.app_id,
                     sequence=self.sequence, issued_us=now_us, valid_until_us=now_us + lifetime_us, active=active, channels=channels)

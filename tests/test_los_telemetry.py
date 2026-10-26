@@ -7,7 +7,7 @@ import pytest
 import zmq
 from bullet_app.los_telemetry import LosTelemetryPublisher, snapshot
 from bullet_msgs.los import LOS_TOPIC, validate_los
-from los_tracking import Diagnostics, NavigationResult, RcChannels, State, TrackStage
+from los_tracking import Diagnostics, NavigationResult, ControlDemand, State, TrackStage
 
 
 def mission(now=1000.):
@@ -17,7 +17,7 @@ def mission(now=1000.):
         elevation_rate_rad_s=pi / 4, azimuth_rate_rad_s=-pi / 3, rate_observable=True,
         optical_ttc_s=2., ttc_reason='qualified', ttc_relative_residual=.02)
     result = NavigationResult(1, now, now + .05, State.TRACK, TrackStage.TTC, 'tracking',
-                              RcChannels(1500, 1500, 1300, 1500), diagnostics)
+                              ControlDemand(0, 0, 0, 10), diagnostics)
     return SimpleNamespace(app_id='app', phase='LOS_APPROACH', reason='tracking',
                            feedback=dict(source=source, state='running', reason='active'), nav_result=result)
 
