@@ -30,9 +30,9 @@ def feedback(step, now, altitude, *, state='running', episode='episode', armed=F
                 state=state, reason='test')
 
 
-def mission():
+def mission(*, hover_check=False):
     config = NavigatorConfig.from_json(PROFILE)
-    m = Mission(config, app_id='app')
+    m = Mission(config, app_id='app', hover_check=hover_check)
     m.configure(platform(config))
     return m
 
@@ -68,7 +68,7 @@ def test_profile_mismatch_refuses_readiness():
 def test_betaflight_stopped_readiness_uses_true_rc_minimum():
     config = NavigatorConfig.from_json(PROFILE)
     m = Mission(config, app_id='app')
-    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     m.observe(feedback(0, 1000., 0., state='stopped'))
     command = m.tick(now_s=1000.)
     assert not command['active'] and command['channels'][2] == 1000 and command['channels'][4] == 1000
@@ -77,7 +77,7 @@ def test_betaflight_stopped_readiness_uses_true_rc_minimum():
 def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
     config = NavigatorConfig.from_json(PROFILE)
     m = Mission(config, app_id='app')
-    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     command = None
     for step in range(30):
         now = 1000. + step / 100
@@ -108,13 +108,10 @@ def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
 def test_betaflight_tolerates_recorded_msp_delay():
     config = NavigatorConfig.from_json(PROFILE)
     m = Mission(config, app_id='app')
-    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
-    samples = [(999.89 + index / 100, 999.89 + index / 100) for index in range(11)] + [(1000., 1000.02)]
-    for step, (attitude_at, altitude_at) in enumerate(samples, 1):
-        m.observe(feedback(step, altitude_at, 0., armed=True))
-        m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=attitude_at),
-                             SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=altitude_at),
-                             SimpleNamespace(armed=True, arming_disabled_flags=0)))
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    for step in range(1, 13):
+        m.observe(feedback(step, 999.89 + step / 100, 0., armed=True))
+        m.observe_estimates((None, None, SimpleNamespace(armed=True, arming_disabled_flags=0)))
     m.phase, m.running_seen, m.started_sim = 'TAKEOFF', True, 0.
     m.observe(feedback(13, 1000.151, 0., armed=True))
 
@@ -124,26 +121,16 @@ def test_betaflight_tolerates_recorded_msp_delay():
     assert command['active']
 
 
-@pytest.mark.parametrize(('attitude_at', 'altitude_at', 'now', 'reason'), [
-    (1000., 1000.19, 1000.21, 'attitude_stale'),
-    (1000.20, 1000., 1000.21, 'barometer_stale'),
-])
-def test_betaflight_reports_the_stale_sensor(attitude_at, altitude_at, now, reason):
+def test_betaflight_reports_stale_simulation_feedback():
     config = NavigatorConfig.from_json(PROFILE)
     m = Mission(config, app_id='app')
-    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='betaflight_imu'))
-    for step in range(1, 13):
-        offset = (step - 12) / 100
-        m.observe(feedback(step, min(attitude_at, altitude_at) + offset, 0., armed=True))
-        m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=attitude_at + offset),
-                             SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=altitude_at + offset),
-                             SimpleNamespace(armed=True, arming_disabled_flags=0)))
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    m.observe(feedback(1, 1000., 0., armed=True))
     m.phase, m.running_seen, m.started_sim = 'TAKEOFF', True, 0.
-    m.observe(feedback(13, now, 0., armed=True))
 
-    command = m.tick(now_s=now)
+    command = m.tick(now_s=1000.21)
 
-    assert m.phase == 'FAULT' and m.reason == reason
+    assert m.phase == 'FAULT' and m.reason == 'feedback_stale'
     assert not command['active']
 
 
@@ -370,3 +357,34 @@ def test_status_records_explicit_takeoff_goal_and_barometer_datum():
     assert d['barometer_datum_m']==4.
     assert d['takeoff_goal_altitude_m']==10.
     assert m.goal==10.  # Recording the reference does not change control state.
+
+
+def test_betaflight_keeps_sensor_feedback_and_uses_msp_only_for_status():
+    m = mission()
+    m.configure(dict(m.platform, schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    m.observe(feedback(0, 1000., 0., state='stopped'))
+    sensor_attitude = m.last_input.attitude
+    m.observe_estimates((None, None, SimpleNamespace(armed=True, arming_disabled_flags=0)))
+    assert m.hold.attitude.timestamp_s == 1000.
+    assert m.last_input.attitude is sensor_attitude
+    assert m.hold.barometer.altitude_m == 0.
+    assert m.datum == 0.
+    assert m.feedback['armed']
+    m.observe_estimates(None)
+    assert not m.feedback['armed'] and m.arming_disabled_flags is None
+
+
+def test_sensor_diagnostics_measure_feedback_rate_and_age():
+    m = mission()
+    m.configure(dict(m.platform, schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    first = 1000.
+    m.observe(feedback(0, first, 1.))
+    m.observe(feedback(1, first + 1 / 120, 1.))
+
+    diagnostics = m.sensor_diagnostics(first + 1 / 120)
+
+    assert diagnostics['expected_hz'] == 120
+    assert diagnostics['observed_hz'] == pytest.approx(120, abs=.01)
+    assert diagnostics['feedback_age_s'] == pytest.approx(0, abs=1e-6)
+    assert diagnostics['attitude_age_s'] == pytest.approx(0, abs=1e-6)
+    assert diagnostics['barometer_age_s'] == pytest.approx(0, abs=1e-6)

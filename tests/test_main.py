@@ -86,3 +86,9 @@ def test_example_reports_transport_error(monkeypatch, capsys):
     monkeypatch.setattr(live_los, "load_transport", fail)
     assert live_los.main(["--transport-config", "unused.json"]) == 1
     assert "invalid transport" in capsys.readouterr().out
+
+
+def test_hover_check_requires_mission_config():
+    with pytest.raises(SystemExit) as error:
+        live_los.main(["--transport-config", "unused.json", "--hover-check"])
+    assert error.value.code == 2

@@ -324,6 +324,19 @@ physics with the current noisy/filtered YAML and a synthetic camera, plus motion
 excursion, reset and duplicate/missing-sample cases. Hardware and full renderer
 flight validation were not performed.
 
+### Betaflight hover-only check
+
+Launch `bullet-app` with its usual mission config plus `--hover-check` to run the
+same Betaflight MSP altitude loop, climb 20 m above the starting barometer datum,
+and hold for 20 continuous seconds after the normal stability checks pass. The
+tuned gains and SITL freshness limits are in the
+[dedicated hover profile](configs/betaflight_hover_profile.json). The check allows
+75 seconds to reach stable hover; any excursion restarts the timer. At completion,
+the app withdraws RC and the simulation freezes at altitude; it does not land.
+MCAP ground truth can be checked with
+`bullet_render/tools/check_app_flight.py --physics-config ../config/basic.yaml
+--hover-check`.
+
 ## Recorded flight diagnostics
 
 The standard workspace launcher records MCAP and separate process logs automatically.
@@ -380,3 +393,19 @@ Automatic filenames and one MCAP per flight are preserved. Existing recordings
 are not moved, configuration files are not rewritten, and changing the setting
 requires a new launch. Process logs stay in
 `bullet_render/recordings/launch_<UTC>/`.
+
+### Betaflight sensor and MSP diagnostics
+
+The Betaflight app uses the simulation feedback IMU attitude and barometer
+altitude. MSP polls status at 10 Hz and streams RC commands; it does not poll
+attitude or altitude. `analysis/app/msp.sensor_feedback` reports expected and
+observed feedback rates, sensor ages, image age, and image-to-attitude alignment.
+`analysis/app/msp.msp_delivery` reports MSP request and response rates and
+transport timing. The console summary prints once per second; MCAP snapshots
+remain at 20 Hz.
+
+`image_attitude_offset_s` is latest image capture time minus the attitude sample
+time used by the mission; a positive value means the image is newer.
+`vision_reason` and `mission_phase`
+show the associated alignment or acquisition state. Rates describe trailing
+one-second windows and ramp up during the first second.

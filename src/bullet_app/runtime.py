@@ -28,9 +28,10 @@ CONFIG_TIMEOUT_S = 3
 
 
 class MissionRuntime:
-    def __init__(self, transport, config, *, bbox_endpoint, image_topic):
+    def __init__(self, transport, config, *, bbox_endpoint, image_topic, hover_check=False):
         self.transport, self.config = transport, config
         self.bbox_endpoint, self.image_topic = bbox_endpoint, image_topic
+        self.hover_check = hover_check
         self.stop = Event()
         self.lock = Lock()
         self.latest_vision = self.display = self.status = None
@@ -69,12 +70,13 @@ class MissionRuntime:
             receiver.close()
 
     def _control(self):
-        mission = Mission(self.config)
+        mission = Mission(self.config, hover_check=self.hover_check)
         publisher = None
         last_command = None
         los_telemetry = None
         msp = None
         next_msp_telemetry = 0.
+        next_msp_summary = 0.
         try:
             with zmq.Context() as context, context.socket(zmq.SUB) as subscriber, context.socket(zmq.PUB) as commands:
                 for socket in (subscriber, commands):
@@ -133,6 +135,7 @@ class MissionRuntime:
                         if msp is not None and mission.identity is not None:
                             msp.set_episode(mission.identity)
                             mission.observe_estimates(msp.snapshot())
+                            now = time.monotonic()
                         command = mission.tick(now_s=now, detection=detection)
                         if command is not None and (now - last_config <= CONFIG_TIMEOUT_S or mission.feedback['state'] == 'running'):
                             if now - last_config > CONFIG_TIMEOUT_S:
@@ -146,14 +149,32 @@ class MissionRuntime:
                         if msp is not None and mission.feedback is not None and now >= next_msp_telemetry:
                             from dataclasses import asdict as snapshot_dict
                             snapshot = msp.snapshot()
+                            timing_now = time.monotonic()
+                            metrics = msp.diagnostics(timing_now)
+                            attitude = mission.last_input.attitude
+                            image_source = detection[0].get('source') if detection is not None else None
+                            image_time = None if not image_source else image_source['measurement_us'] / 1e6
+                            sensor_metrics = mission.sensor_diagnostics(timing_now)
+                            sensor_metrics.update(
+                                image_age_s=None if image_time is None else timing_now - image_time,
+                                image_attitude_offset_s=(None if image_time is None or attitude is None
+                                                         else image_time - attitude.timestamp_s),
+                                vision_reason=mission.diagnostics.get('vision_reason'), mission_phase=mission.phase)
                             packet = dict(schema_version=1, source=mission.feedback['source'], backend='betaflight',
                                 timestamp_kind='host_receipt', firmware=msp.firmware, error=msp.error,
+                                msp_delivery=metrics, sensor_feedback=sensor_metrics,
                                 rc_frames_sent=msp.client.rc.sent, last_rc_sent_at_s=msp.client.rc.last_sent_at,
                                 attitude=None if not snapshot or snapshot[0] is None else snapshot_dict(snapshot[0]),
                                 altitude=None if not snapshot or snapshot[1] is None else snapshot_dict(snapshot[1]),
                                 status=None if not snapshot or snapshot[2] is None else snapshot_dict(snapshot[2]))
                             publisher.socket.send_multipart([b'analysis/app/msp', json.dumps(packet, allow_nan=False).encode()], zmq.NOBLOCK)
                             next_msp_telemetry = now + .05
+                            if timing_now >= next_msp_summary:
+                                print('Sim sensors: feedback={observed_hz:.1f}/{expected_hz:.1f} Hz, '
+                                      'age={feedback_age_s}, attitude_age={attitude_age_s}, '
+                                      'barometer_age={barometer_age_s}; MSP status requests={requests_hz}, '
+                                      'responses={responses_hz}'.format(**sensor_metrics, **metrics), flush=True)
+                                next_msp_summary = timing_now + 1.
                         los_telemetry.publish(mission, now_s=now)
                         status = mission.status(now)
                         if status is not None:
@@ -204,7 +225,8 @@ class MissionRuntime:
 
 def run_mission(args, transport):
     config = NavigatorConfig.from_json(args.mission_config)
-    runtime = MissionRuntime(transport, config, bbox_endpoint=args.bbox_endpoint, image_topic=args.topic)
+    runtime = MissionRuntime(transport, config, bbox_endpoint=args.bbox_endpoint, image_topic=args.topic,
+                             hover_check=args.hover_check)
     window = 'Bullet app: mission'
     opened = False
     try:

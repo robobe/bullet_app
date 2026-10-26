@@ -18,6 +18,7 @@ from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_
 
 TAKEOFF_HEIGHT_M = DEFAULT_TAKEOFF_HEIGHT_M
 HOVER_DURATION_S = 3.0
+HOVER_CHECK_DURATION_S = 20.0
 SETTLING_WINDOW_S = 1.0
 SETTLING_MIN_SAMPLES = 3
 # One second at the supported 240 Hz physics rate, including the boundary sample.
@@ -25,6 +26,7 @@ SETTLING_HISTORY_CAPACITY = 241
 TIME_EPSILON_S = 1e-9
 TARGET_CHECK_DURATION_S = 0.1
 TAKEOFF_TIMEOUT_S = 60.0
+HOVER_CHECK_TAKEOFF_TIMEOUT_S = 75.0
 ALTITUDE_TOLERANCE_M = 0.25
 BETAFLIGHT_ALTITUDE_TOLERANCE_M = 0.5
 VERTICAL_SPEED_TOLERANCE_M_S = 0.2
@@ -37,10 +39,11 @@ DISARMED_AETR = ControlDemand(0., 0., 0., 0.)
 
 
 class Mission:
-    def __init__(self, config, *, app_id=None):
+    def __init__(self, config, *, app_id=None, hover_check=False):
         if config.tuning.yaw_rate_limit_rad_s < SEARCH_RATE_RAD_S:
             raise ValueError('yaw search requires a yaw limit of at least 15 deg/s')
         self.config = config
+        self.hover_check = hover_check
         self.app_id = app_id or uuid4().hex
         self.platform = self.feedback = None
         self.sequence = 0
@@ -67,6 +70,7 @@ class Mission:
         self.running_seen = False
         self.relative_altitude = self.vertical_speed = None
         self._settling_altitudes = deque(maxlen=SETTLING_HISTORY_CAPACITY)
+        self.feedback_timestamps = deque(maxlen=256)
 
     def configure(self, platform):
         validate_config(platform)
@@ -106,9 +110,8 @@ class Mission:
         if source['step_index'] == self.last_step:
             return
         self.last_step = source['step_index']
-        if self.platform.get('backend') == 'betaflight':
-            return
         timestamp = source['measurement_us'] / 1e6
+        self.feedback_timestamps.append(timestamp)
         attitude = AttitudeSample(source['stream_id'], source['step_index'], timestamp, tuple(feedback['orientation_xyzw']))
         barometer = (None if feedback['barometer_altitude_m'] is None else
                      BarometerSample(source['stream_id'], source['step_index'], timestamp, feedback['barometer_altitude_m']))
@@ -129,31 +132,24 @@ class Mission:
             self.datum = barometer.altitude_m
             self.goal = self.datum + self.takeoff_height_m
 
+    def sensor_diagnostics(self, now_s):
+        recent = [stamp for stamp in self.feedback_timestamps if now_s - 1 < stamp <= now_s]
+        rate = ((len(recent) - 1) / (recent[-1] - recent[0])
+                if len(recent) > 1 and recent[-1] > recent[0] else 0.)
+        attitude = self.last_input.attitude
+        barometer = self.last_input.barometer
+        return dict(window_s=1., expected_hz=self.platform['feedback_hz'], observed_hz=rate,
+                    feedback_age_s=None if not recent else now_s - recent[-1],
+                    attitude_age_s=None if attitude is None else now_s - attitude.timestamp_s,
+                    barometer_age_s=None if barometer is None else now_s - barometer.timestamp_s)
+
     def observe_estimates(self, snapshot):
-        """MSP measurements have individual receipt times, never physics sample stamps."""
-        if snapshot is None or self.feedback is None:
+        """Use MSP for Betaflight arming status, while sensors come from feedback."""
+        if self.feedback is None:
             return
-        attitude, altitude, status = snapshot
-        if status is not None:
-            self.feedback = dict(self.feedback, armed=status.armed)
-            self.arming_disabled_flags = status.arming_disabled_flags
-        if attitude is None or altitude is None:
-            return
-        from .msp_flight import body_to_world
-        stream = self.feedback['source']['stream_id']
-        a = AttitudeSample(stream, round(attitude.received_at * 1e6), attitude.received_at,
-                           body_to_world(attitude.roll_rad, attitude.pitch_rad, attitude.yaw_rad))
-        b = BarometerSample(stream, round(altitude.received_at * 1e6), altitude.received_at, altitude.altitude_m)
-        self.last_input = NavigationInput(attitude=a, barometer=b)
-        self.hold.observe(self.last_input)
-        if not self._settling_altitudes or altitude.received_at > self._settling_altitudes[-1][0]:
-            self._settling_altitudes.append((altitude.received_at, altitude.altitude_m))
-            while len(self._settling_altitudes) > 2 and self._settling_altitudes[1][0] <= altitude.received_at - SETTLING_WINDOW_S:
-                self._settling_altitudes.popleft()
-        self.search.observe(euler(a.orientation_xyzw)[2], a.timestamp_s)
-        if self.datum is None:
-            self.datum = altitude.altitude_m
-            self.goal = self.datum + self.takeoff_height_m
+        status = None if snapshot is None else snapshot[2]
+        self.feedback = dict(self.feedback, armed=False if status is None else status.armed)
+        self.arming_disabled_flags = None if status is None else status.arming_disabled_flags
 
     def complete(self, result):
         validate_end(result)
@@ -178,7 +174,7 @@ class Mission:
         armed = False
         command = DISARMED_AETR
         lifetime_us = COMMAND_LIFETIME_US
-        if self.phase == 'COMPLETED' or (f['state'] == 'stopped' and f['reason'] == 'target_hit'):
+        if f['state'] == 'stopped' and f['reason'] == 'target_hit':
             self.phase, self.reason = 'COMPLETED', 'target_hit'
         elif f['state'] == 'running':
             if not self.running_seen:
@@ -241,7 +237,7 @@ class Mission:
                 if self.phase in ('SENSOR_WARMUP', 'ARMING') and sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
                     self.fail('warmup_or_arm_timeout')
         else:
-            if self.phase != 'FAULT':
+            if self.phase not in ('FAULT', 'COMPLETED'):
                 self.phase, self.reason = 'READY', f['reason']
         if self.phase in ('FAULT', 'COMPLETED'):
             active, armed, command = False, False, DISARMED_AETR
@@ -280,6 +276,7 @@ class Mission:
         level = (abs(altitude - self.goal) <= altitude_tolerance
                  and settling_vz is not None and abs(settling_vz) <= VERTICAL_SPEED_TOLERANCE_M_S
                  and max(abs(roll), abs(pitch)) <= ATTITUDE_TOLERANCE_RAD)
+        hover_duration = HOVER_CHECK_DURATION_S if self.hover_check else HOVER_DURATION_S
         if self.phase in ('TAKEOFF', 'HOVER'):
             settled = level and abs(wrap(yaw - self.hold.heading_rad)) <= ATTITUDE_TOLERANCE_RAD
             if not settled:
@@ -289,10 +286,13 @@ class Mission:
                 self.phase, self.reason = 'HOVER', 'settling'
                 if self.settled_sim is None:
                     self.settled_sim = sim
-                if sim - self.settled_sim >= HOVER_DURATION_S:
-                    self.phase, self.reason = 'WAIT_TARGET', 'waiting_post_hover_bbox'
+                if sim - self.settled_sim >= hover_duration:
+                    self.phase, self.reason = (('COMPLETED', 'hover_complete') if self.hover_check
+                                               else ('WAIT_TARGET', 'waiting_post_hover_bbox'))
                     self.hover_completed_sim, self.hover_completed_us = sim, now_us
-            if sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
+            takeoff_timeout = HOVER_CHECK_TAKEOFF_TIMEOUT_S if self.hover_check else TAKEOFF_TIMEOUT_S
+            if (sim - self.started_sim >= takeoff_timeout
+                    and (not self.hover_check or self.phase == 'TAKEOFF')):
                 self.fail('takeoff_timeout')
 
         begin_los = False
@@ -416,7 +416,8 @@ class Mission:
                     sequence=self.sequence, measurement_us=int(now_s * 1e6), simulation_time_s=sim,
                     phase=self.phase, reason=self.reason, relative_altitude_m=self.relative_altitude,
                     vertical_speed_m_s=self.vertical_speed,
-                    hover_remaining_s=max(0., HOVER_DURATION_S - (0 if self.settled_sim is None else sim - self.settled_sim)),
+                    hover_remaining_s=max(0., (HOVER_CHECK_DURATION_S if self.hover_check else HOVER_DURATION_S)
+                                          - (0 if self.settled_sim is None else sim - self.settled_sim)),
                     target_remaining_s=(max(0., TARGET_CHECK_DURATION_S - (sim - self.hover_completed_sim))
                                         if self.phase == 'WAIT_TARGET' else 0.),
                     navigator_state=None if self.nav_result is None else self.nav_result.state.value,

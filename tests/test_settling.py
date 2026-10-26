@@ -8,8 +8,8 @@ from bullet_drone.geometry import from_rpy
 from test_mission import mission, feedback
 
 
-def ready_hover(rate=0.):
-    m = mission()
+def ready_hover(rate=0., *, hover_check=False):
+    m = mission(hover_check=hover_check)
     m.observe(feedback(0, 1000., 0., state='stopped'))
     for step in range(1, 481):
         m.observe(feedback(step, 1000 + step / 240, 20 + rate * (step / 240 - 1.5), armed=True))
@@ -17,6 +17,34 @@ def ready_hover(rate=0.):
     m.phase = 'HOVER'
     m.started_sim, m.settled_sim = 0., 1.
     return m
+
+
+def test_hover_check_restarts_stability_dwell_and_withdraws_at_completion():
+    m = ready_hover(hover_check=True)
+    first_hover = m.settled_sim
+    disturbed = False
+    rc = None
+    for step in range(481, 8000):
+        now = 1000 + step / 240
+        altitude = 21. if 1200 <= step < 1201 else 20.
+        m.observe(feedback(step, now, altitude, armed=True,
+                          applied=0 if rc is None else rc['sequence']))
+        rc = m.tick(now_s=now)
+        if m.phase == 'TAKEOFF' and not disturbed:
+            disturbed = True
+            assert m.settled_sim is None
+        if m.phase == 'COMPLETED':
+            break
+    assert disturbed and m.phase == 'COMPLETED' and m.reason == 'hover_complete'
+    assert m.settled_sim > first_hover
+    assert m.feedback['source']['simulation_time_s'] - m.settled_sim >= 20.
+    assert not rc['active'] and rc['channels'][2] == 1000 and rc['channels'][4] == 1000
+    assert m.status(now)['hover_remaining_s'] == 0.
+    stopped = feedback(step + 1, now + .01, 20., state='stopped', applied=rc['sequence'])
+    stopped['reason'] = 'app_withdrawn'
+    m.observe(stopped)
+    rc = m.tick(now_s=now + .01)
+    assert m.phase == 'COMPLETED' and m.reason == 'hover_complete' and not rc['active']
 
 
 def test_stationary_noise_completes_dwell_with_original_control_velocity():
@@ -59,20 +87,12 @@ def test_betaflight_allows_wider_takeoff_hover_altitude_envelope(backend, altitu
     m = ready_hover()
     samples = list(m._settling_altitudes)
     m._settling_altitudes.clear()
-    if backend:
-        m.configure(dict(m.platform, schema_version=2, backend=backend, attitude_model='betaflight_imu'))
     step = 481
     now = 1000 + step / 240
     if backend:
-        m._settling_altitudes.extend((now - (len(samples) - 1 - index) / 240, altitude)
-                                     for index in range(len(samples)))
-        m.observe(feedback(step, now, 0., armed=True))
-        m.observe_estimates((Mock(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=now),
-                             Mock(altitude_m=altitude, vertical_speed_m_s=0., received_at=now),
-                             Mock(armed=True, arming_disabled_flags=0)))
-    else:
-        m._settling_altitudes.extend((time, altitude) for time, _ in samples)
-        m.observe(feedback(step, now, altitude, armed=True))
+        m.configure(dict(m.platform, schema_version=2, backend=backend, attitude_model='imu_complementary'))
+    m._settling_altitudes.extend((time, altitude) for time, _ in samples)
+    m.observe(feedback(step, now, altitude, armed=True))
     m.tick(now_s=now)
     assert (m.phase == 'HOVER') is settles
 

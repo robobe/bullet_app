@@ -38,7 +38,10 @@ def main(argv=None):
     parser.add_argument("--debug", action="store_true", help="Show camera frames and target bounding box")
     parser.add_argument("--bbox-endpoint", default="tcp://127.0.0.1:5558", help="Loopback TCP endpoint to bind for bbox results")
     parser.add_argument("--mission-config", type=Path, help="Enable app-owned takeoff/hover/LOS using this navigator profile")
+    parser.add_argument("--hover-check", action="store_true", help="Stop after a stable 20-second hover")
     args = parser.parse_args(argv)
+    if args.hover_check and args.mission_config is None:
+        parser.error("--hover-check requires --mission-config")
     receiver = publisher = None
     window_open = False
     window = f"Bullet app: {args.topic} ({os.getpid()})"
