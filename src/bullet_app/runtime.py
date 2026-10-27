@@ -27,6 +27,18 @@ THREAD_JOIN_TIMEOUT_S = 3
 CONFIG_TIMEOUT_S = 3
 
 
+def format_msp_status_before_arm(status):
+    if status is None:
+        return 'Betaflight MSP status before arm: unavailable'
+    return ('Betaflight MSP status before arm: armed={}, mode_flags=0x{:08x}, '
+            'arming_disabled_flags=0x{:08x}'.format(
+                status.armed, status.mode_flags, status.arming_disabled_flags))
+
+
+def msp_status_from_snapshot(snapshot):
+    return None if snapshot is None else snapshot[2]
+
+
 class MissionRuntime:
     def __init__(self, transport, config, *, bbox_endpoint, image_topic, hover_check=False):
         self.transport, self.config = transport, config
@@ -75,6 +87,8 @@ class MissionRuntime:
         last_command = None
         los_telemetry = None
         msp = None
+        msp_arm_status_episode = None
+        msp_status = None
         next_msp_telemetry = 0.
         next_msp_summary = 0.
         try:
@@ -134,7 +148,9 @@ class MissionRuntime:
                             mission.fail('platform_stale')
                         if msp is not None and mission.identity is not None:
                             msp.set_episode(mission.identity)
-                            mission.observe_estimates(msp.snapshot())
+                            msp_snapshot = msp.snapshot()
+                            msp_status = msp_status_from_snapshot(msp_snapshot)
+                            mission.observe_estimates(msp_snapshot)
                             now = time.monotonic()
                         command = mission.tick(now_s=now, detection=detection)
                         if command is not None and (now - last_config <= CONFIG_TIMEOUT_S or mission.feedback['state'] == 'running'):
@@ -142,6 +158,10 @@ class MissionRuntime:
                                 command['active'] = False
                                 command['channels'][4] = 1000
                                 command['channels'][2] = 1000
+                            if (msp is not None and command['channels'][4] >= 1500
+                                    and msp_arm_status_episode != mission.identity):
+                                print(format_msp_status_before_arm(msp_status), flush=True)
+                                msp_arm_status_episode = mission.identity
                             commands.send_multipart([RC_TOPIC, encode(command, validate_rc)], zmq.NOBLOCK)
                             last_command = command
                             if msp is not None:
