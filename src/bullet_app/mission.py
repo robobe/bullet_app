@@ -206,7 +206,7 @@ class Mission:
                         armed = False
                         self.arm_sequence = None
                         self.reason = 'waiting_betaflight_prearm'
-                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
+                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH', 'LOS_COMMIT'):
                     armed = True
                     if not self.hold.ready(now_s):
                         attitude = self.last_input.attitude
@@ -230,7 +230,9 @@ class Mission:
                         else:
                             command = result.command
                             lifetime_us = min(lifetime_us, int(result.valid_until_s * 1e6) - now_us)
-                            self.phase = 'LOS_APPROACH' if result.state == State.TRACK else 'LOS_ACQUIRE'
+                            self.phase = ('LOS_COMMIT' if result.state == State.COMMIT
+                                          else 'LOS_APPROACH' if result.state == State.TRACK
+                                          else 'LOS_ACQUIRE')
                             self.reason = result.reason
                     else:
                         command = self._hold_tick(now_s, detection)

@@ -53,6 +53,15 @@ def test_degrees_timestamps_and_confidence_without_mutation():
     assert m.feedback['source']['step_index'] == 240
 
 
+def test_commit_phase_is_active_los_telemetry():
+    m = mission()
+    m.phase, m.reason = 'LOS_COMMIT', 'close_target_commit'
+    m.nav_result = replace(m.nav_result, state=State.COMMIT, reason='close_target_commit')
+    value = snapshot(m, now_s=1000.01, sequence=1)
+    assert value['active'] and value['navigator_state'] == 'commit'
+    assert value['mission_phase'] == 'LOS_COMMIT'
+
+
 @pytest.mark.parametrize('reason,residual', [('insufficient_history', None), ('not_closing', None), ('noisy_growth', .5), ('stale', .02)])
 def test_unqualified_ttc_and_unavailable_bearing(reason, residual):
     m = mission()

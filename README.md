@@ -100,7 +100,7 @@ uv run --locked --all-packages --all-extras --all-groups python -m examples.exte
 # bullet_app terminal
 uv run --locked --all-packages --all-extras --all-groups bullet-app \
   --transport-config ../bullet_render/configs/transport.json \
-  --mission-config ../los_tracking/examples/bullet_profile.json --debug
+  --mission-config ../los_tracking/examples/bullet_profile.yaml --debug
 ```
 
 Each Start creates a new episode and runs `SENSOR_WARMUP → ARMING → TAKEOFF →
@@ -330,7 +330,7 @@ Launch `bullet-app` with its usual mission config plus `--hover-check` to run th
 same Betaflight MSP altitude loop, climb 20 m above the starting barometer datum,
 and hold for 20 continuous seconds after the normal stability checks pass. The
 tuned gains and SITL freshness limits are in the
-[dedicated hover profile](configs/betaflight_hover_profile.json). The check allows
+[dedicated hover profile](configs/betaflight_hover_profile.yaml). The check allows
 75 seconds to reach stable hover; any excursion restarts the timer. At completion,
 the app withdraws RC and the simulation freezes at altitude; it does not land.
 MCAP ground truth can be checked with

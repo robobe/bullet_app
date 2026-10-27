@@ -10,7 +10,7 @@ from bullet_msgs.los import LOS_HZ, LOS_TOPIC, validate_los
 MICROSECONDS_PER_SECOND = 1_000_000
 PERIOD_S = 1 / LOS_HZ
 TIME_EPSILON_S = 1e-9
-LOS_PHASES = ('LOS_ACQUIRE', 'LOS_APPROACH')
+LOS_PHASES = ('LOS_ACQUIRE', 'LOS_APPROACH', 'LOS_COMMIT')
 
 
 def snapshot(mission, *, now_s, sequence, shutdown=False):

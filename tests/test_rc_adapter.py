@@ -8,11 +8,11 @@ from bullet_app.rc import encode_demand
 from los_tracking import ControlDemand, NavigatorConfig
 
 
-PROFILE = Path(__file__).resolve().parents[2] / 'los_tracking/examples/bullet_profile.json'
+PROFILE = Path(__file__).resolve().parents[2] / 'los_tracking/examples/bullet_profile.yaml'
 
 
 def test_internal_and_betaflight_encoding_are_application_owned():
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     demand = ControlDemand(radians(10), radians(-5), radians(70), 9.81)
     internal = encode_demand(demand, config, backend='internal')
     betaflight = encode_demand(demand, config, backend='betaflight')
@@ -23,7 +23,7 @@ def test_internal_and_betaflight_encoding_are_application_owned():
 
 
 def test_betaflight_adapter_clamps_at_tracker_physical_limits():
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     disarmed = encode_demand(ControlDemand(0, 0, 0, 0), config, backend='betaflight')
     assert disarmed.throttle == 1000
     channels = encode_demand(ControlDemand(10, -10, 100, 1e6), config, backend='betaflight')

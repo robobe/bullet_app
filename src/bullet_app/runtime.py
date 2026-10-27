@@ -244,7 +244,7 @@ class MissionRuntime:
 
 
 def run_mission(args, transport):
-    config = NavigatorConfig.from_json(args.mission_config)
+    config = NavigatorConfig.from_yaml(args.mission_config)
     runtime = MissionRuntime(transport, config, bbox_endpoint=args.bbox_endpoint, image_topic=args.topic,
                              hover_check=args.hover_check)
     window = 'Bullet app: mission'

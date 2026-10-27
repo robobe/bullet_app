@@ -5,11 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 from bullet_app.mission import Mission
-from los_tracking import NavigatorConfig
+from los_tracking import ControlDemand, Diagnostics, NavigationResult, NavigatorConfig, State, TrackStage
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PROFILE = ROOT / 'los_tracking/examples/bullet_profile.json'
+PROFILE = ROOT / 'los_tracking/examples/bullet_profile.yaml'
 
 
 def platform(config):
@@ -31,7 +31,7 @@ def feedback(step, now, altitude, *, state='running', episode='episode', armed=F
 
 
 def mission(*, hover_check=False):
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     m = Mission(config, app_id='app', hover_check=hover_check)
     m.configure(platform(config))
     return m
@@ -66,7 +66,7 @@ def test_profile_mismatch_refuses_readiness():
 
 
 def test_betaflight_stopped_readiness_uses_true_rc_minimum():
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     m.observe(feedback(0, 1000., 0., state='stopped'))
@@ -75,7 +75,7 @@ def test_betaflight_stopped_readiness_uses_true_rc_minimum():
 
 
 def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     command = None
@@ -106,7 +106,7 @@ def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
 
 
 def test_betaflight_tolerates_recorded_msp_delay():
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     for step in range(1, 13):
@@ -122,7 +122,7 @@ def test_betaflight_tolerates_recorded_msp_delay():
 
 
 def test_betaflight_reports_stale_simulation_feedback():
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     m.observe(feedback(1, 1000., 0., armed=True))
@@ -132,6 +132,22 @@ def test_betaflight_reports_stale_simulation_feedback():
 
     assert m.phase == 'FAULT' and m.reason == 'feedback_stale'
     assert not command['active']
+
+
+def test_commit_phase_keeps_sending_the_latched_command():
+    m = mission()
+    now = 1000.
+    m.observe(feedback(1, now, 20., armed=True))
+    m.running_seen, m.phase = True, 'LOS_COMMIT'
+    m.hold.ready = lambda _: True
+    result = NavigationResult(1, now, now + .1, State.COMMIT, TrackStage.TTC, 'close_target_commit',
+                              ControlDemand(.1, .2, 0., 10.), Diagnostics())
+    m.navigator = SimpleNamespace(update=lambda *args, **kwargs: result)
+
+    command = m.tick(now_s=now)
+
+    assert m.phase == 'LOS_COMMIT' and command['active']
+    assert command['channels'][2] > 1000
 
 
 @pytest.mark.parametrize('target_found', [False, True])
@@ -336,7 +352,7 @@ def test_stopped_feedback_retains_cause_and_fault_diagnostics_until_new_episode(
 
 def test_complementary_attitude_feedback_reaches_navigation():
     from bullet_drone.geometry import from_rpy
-    config = NavigatorConfig.from_json(PROFILE)
+    config = NavigatorConfig.from_yaml(PROFILE)
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), attitude_model='imu_complementary'))
     packet = feedback(0, 1000., 4., state='stopped')

@@ -14,6 +14,7 @@ REASON_MESSAGES = {
     'not_observed': 'waiting for target observations',
     'stale_image': 'target image is too old',
     'image_deadline': 'holding position before the target image expires',
+    'close_target_commit': 'target fills the image; continuing the last tracking command',
     'clipped_target': 'target box touches the image edge',
     'attitude_unaligned': 'waiting for attitude aligned to the image timestamp',
     'los_deviation': 'target moved outside the allowed LOS deviation',
