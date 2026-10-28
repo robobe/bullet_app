@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Main Bullet application: live camera to red-target bounding boxes"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["msp-link", "bullet-msgs", "los-tracking", "numpy>=2,<3", "opencv-python>=4.10,<5", "pyzmq>=27,<28", "jsonschema>=4,<5"]
+dependencies = ["msp-link", "bullet-msgs", "los-tracking", "click>=8.5,<9", "loguru>=0.7,<1", "numpy>=2,<3", "opencv-python>=4.10,<5", "pyzmq>=27,<28", "jsonschema>=4,<5"]
 
 [project.scripts]
 bullet-app = "bullet_app.main:main"

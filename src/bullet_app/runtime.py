@@ -1,13 +1,15 @@
 """Dedicated mission and vision threads; OpenCV UI stays on the main thread."""
 import json
 from dataclasses import asdict
+import os
 from pathlib import Path
-import traceback
 from bullet_msgs.provenance import revisions
 from threading import Event, Lock, Thread
 import time
 
 import cv2
+from loguru import logger
+import numpy as np
 import zmq
 from bullet_msgs.flight import (CONFIG_TOPIC, FEEDBACK_TOPIC, RC_TOPIC, MISSION_TOPIC,
                                MAX_FLIGHT_BYTES, decode, encode, validate_config, validate_feedback, validate_rc)
@@ -19,6 +21,7 @@ from .mission import Mission, COMMAND_PERIOD_S
 from .los_telemetry import LosTelemetryPublisher
 from .publisher import BboxPublisher
 from .receiver import ImageReceiver
+from .ui import draw_debug
 
 
 MAX_FEEDBACK_BATCH = 64
@@ -37,6 +40,63 @@ def format_msp_status_before_arm(status):
 
 def msp_status_from_snapshot(snapshot):
     return None if snapshot is None else snapshot[2]
+
+
+class DetectorRuntime:
+    """Own the detector-only image, publication, and optional display lifecycle."""
+
+    def __init__(self, options, transport):
+        self.options = options
+        self.transport = transport
+
+    def run(self):
+        receiver = publisher = None
+        window_open = False
+        window = f"Bullet app: {self.options.topic} ({os.getpid()})"
+        try:
+            publisher = BboxPublisher(self.options.bbox_endpoint)
+            receiver = ImageReceiver(self.transport["image_endpoint"], self.options.topic)
+            image = np.zeros((480, 640, 3), dtype=np.uint8)
+            bbox = last_frame = None
+            last_report = time.monotonic()
+            sequence = 0
+            if self.options.debug:
+                cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+                window_open = True
+            logger.info("Subscribed to {} on {}, SHM pixels", self.options.topic, self.transport["image_endpoint"])
+            logger.info("Publishing tracking/front/bbox on {}", self.options.bbox_endpoint)
+            while True:
+                result = receiver.poll()
+                now = time.monotonic()
+                if result is not None:
+                    metadata, image = result
+                    bbox = detect_red_box(image)
+                    publisher.publish(metadata, bbox, self.options.topic)
+                    sequence = metadata["sequence"]
+                    last_frame = now
+                status = "Waiting for frames" if last_frame is None else ("Live" if now - last_frame < 1 else "Stale")
+                text = f"{status} | Frame {sequence} | bbox={bbox}"
+                if now - last_report >= 1:
+                    logger.info(text)
+                    last_report = now
+                if self.options.debug:
+                    cv2.imshow(window, draw_debug(image, bbox, status))
+                    if cv2.waitKey(10) & 0xff in (ord("q"), 27):
+                        break
+                    if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+                        break
+                elif result is None:
+                    time.sleep(0.01)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if receiver is not None:
+                receiver.close()
+            if publisher is not None:
+                publisher.close()
+            if window_open:
+                cv2.destroyAllWindows()
+        return 0
 
 
 class MissionRuntime:
@@ -60,7 +120,7 @@ class MissionRuntime:
         try:
             target()
         except Exception as error:
-            traceback.print_exc()
+            logger.exception("Mission thread {} failed", target.__name__)
             self.error = f'{target.__name__}: {error}'
             self.stop.set()
 
@@ -160,7 +220,7 @@ class MissionRuntime:
                                 command['channels'][2] = 1000
                             if (msp is not None and command['channels'][4] >= 1500
                                     and msp_arm_status_episode != mission.identity):
-                                print(format_msp_status_before_arm(msp_status), flush=True)
+                                logger.info(format_msp_status_before_arm(msp_status))
                                 msp_arm_status_episode = mission.identity
                             commands.send_multipart([RC_TOPIC, encode(command, validate_rc)], zmq.NOBLOCK)
                             last_command = command
@@ -190,10 +250,10 @@ class MissionRuntime:
                             publisher.socket.send_multipart([b'analysis/app/msp', json.dumps(packet, allow_nan=False).encode()], zmq.NOBLOCK)
                             next_msp_telemetry = now + .05
                             if timing_now >= next_msp_summary:
-                                print('Sim sensors: feedback={observed_hz:.1f}/{expected_hz:.1f} Hz, '
-                                      'age={feedback_age_s}, attitude_age={attitude_age_s}, '
-                                      'barometer_age={barometer_age_s}; MSP status requests={requests_hz}, '
-                                      'responses={responses_hz}'.format(**sensor_metrics, **metrics), flush=True)
+                                logger.info('Sim sensors: feedback={observed_hz:.1f}/{expected_hz:.1f} Hz, '
+                                            'age={feedback_age_s}, attitude_age={attitude_age_s}, '
+                                            'barometer_age={barometer_age_s}; MSP status requests={requests_hz}, '
+                                            'responses={responses_hz}'.format(**sensor_metrics, **metrics))
                                 next_msp_summary = timing_now + 1.
                         los_telemetry.publish(mission, now_s=now)
                         status = mission.status(now)
@@ -243,42 +303,52 @@ class MissionRuntime:
                 self.error = f'{thread.name} failed to stop'
 
 
+class MissionRunner:
+    """Own the mission runtime and optional OpenCV status display."""
+
+    def __init__(self, options, transport):
+        self.options = options
+        self.transport = transport
+
+    def run(self):
+        config = NavigatorConfig.from_yaml(self.options.mission_config)
+        runtime = MissionRuntime(self.transport, config, bbox_endpoint=self.options.bbox_endpoint,
+                                 image_topic=self.options.topic, hover_check=self.options.hover_check)
+        window = 'Bullet app: mission'
+        opened = False
+        try:
+            runtime.start()
+            if self.options.debug:
+                cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+                opened = True
+            from .status import format_status, status_key
+            previous_status = None
+            while not runtime.stop.is_set():
+                with runtime.lock:
+                    display, status = runtime.display, runtime.status
+                if status is not None and status_key(status) != previous_status:
+                    previous_status = status_key(status)
+                    logger.info("Mission {}: {}", status['phase'], format_status(status))
+                if self.options.debug:
+                    if display is not None:
+                        text = f"{status['phase']}: {format_status(status)}" if status else 'Waiting'
+                        cv2.imshow(window, draw_debug(*display, text))
+                    if cv2.waitKey(10) & 0xff in (ord('q'), 27) or cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+                        break
+                else:
+                    runtime.stop.wait(0.05)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            runtime.close()
+            if opened:
+                cv2.destroyAllWindows()
+        if runtime.error:
+            logger.error("Bullet mission failed: {}", runtime.error)
+            return 1
+        return 0
+
+
 def run_mission(args, transport):
-    config = NavigatorConfig.from_yaml(args.mission_config)
-    runtime = MissionRuntime(transport, config, bbox_endpoint=args.bbox_endpoint, image_topic=args.topic,
-                             hover_check=args.hover_check)
-    window = 'Bullet app: mission'
-    opened = False
-    try:
-        runtime.start()
-        if args.debug:
-            cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-            opened = True
-        from .status import format_status, status_key
-        previous_status = None
-        previous_phase = None
-        while not runtime.stop.is_set():
-            with runtime.lock:
-                display, status = runtime.display, runtime.status
-            if status is not None and status_key(status) != previous_status:
-                previous_status = status_key(status)
-                previous_phase = status['phase']
-                print(f"Mission {previous_phase}: {format_status(status)}", flush=True)
-            if args.debug:
-                if display is not None:
-                    from .main import draw_debug
-                    cv2.imshow(window, draw_debug(*display, f"{status['phase']}: {format_status(status)}" if status else 'Waiting'))
-                if cv2.waitKey(10) & 0xff in (ord('q'), 27) or cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
-                    break
-            else:
-                runtime.stop.wait(0.05)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        runtime.close()
-        if opened:
-            cv2.destroyAllWindows()
-    if runtime.error:
-        print(f'Bullet mission failed: {runtime.error}', flush=True)
-        return 1
-    return 0
+    """Compatibility wrapper for callers that imported the former helper."""
+    return MissionRunner(args, transport).run()

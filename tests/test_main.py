@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 
 import bullet_app.main as live_los
+import bullet_app.application as application
+import bullet_app.runtime as runtime
 
 
 def test_debug_drawing_preserves_input_and_clears_bbox():
@@ -48,10 +50,10 @@ def test_example_processes_frames_and_cleans_up(monkeypatch, debug):
         def close(self):
             Publisher.closed = True
 
-    monkeypatch.setattr(live_los, "BboxPublisher", Publisher)
-    monkeypatch.setattr(live_los, "ImageReceiver", Receiver)
-    monkeypatch.setattr(live_los, "load_transport", lambda path: {"image_endpoint": "tcp://127.0.0.1:5556"})
-    monkeypatch.setattr(live_los.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(runtime, "BboxPublisher", Publisher)
+    monkeypatch.setattr(runtime, "ImageReceiver", Receiver)
+    monkeypatch.setattr(application, "load_transport", lambda path: {"image_endpoint": "tcp://127.0.0.1:5556"})
+    monkeypatch.setattr(runtime.time, "sleep", lambda seconds: None)
     calls = []
 
     def gui(name, result=None):
@@ -65,7 +67,7 @@ def test_example_processes_frames_and_cleans_up(monkeypatch, debug):
 
     for name, result in [("namedWindow", None), ("imshow", None), ("waitKey", -1),
                          ("getWindowProperty", 1), ("destroyAllWindows", None)]:
-        monkeypatch.setattr(live_los.cv2, name, gui(name, result))
+        monkeypatch.setattr(runtime.cv2, name, gui(name, result))
     args = ["--transport-config", "unused.json"] + (["--debug"] if debug else [])
     assert live_los.main(args) == 0
     assert Receiver.closed and Publisher.closed
@@ -83,12 +85,11 @@ def test_example_processes_frames_and_cleans_up(monkeypatch, debug):
 def test_example_reports_transport_error(monkeypatch, capsys):
     def fail(path):
         raise ValueError("invalid transport")
-    monkeypatch.setattr(live_los, "load_transport", fail)
+    monkeypatch.setattr(application, "load_transport", fail)
     assert live_los.main(["--transport-config", "unused.json"]) == 1
     assert "invalid transport" in capsys.readouterr().out
 
 
-def test_hover_check_requires_mission_config():
-    with pytest.raises(SystemExit) as error:
-        live_los.main(["--transport-config", "unused.json", "--hover-check"])
-    assert error.value.code == 2
+def test_hover_check_requires_mission_config(capsys):
+    assert live_los.main(["--transport-config", "unused.json", "--hover-check"]) == 2
+    assert "--hover-check requires --mission-config" in capsys.readouterr().err
