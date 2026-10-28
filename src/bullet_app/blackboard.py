@@ -56,6 +56,7 @@ class RuntimeBlackboard:
     def __init__(self):
         self._lock = Lock()
         self._config = None
+        self._latest_feedback = None
         self._vision = self._display = self._status = None
         self._feedback = deque()
         self._terminal_events = deque()
@@ -73,6 +74,7 @@ class RuntimeBlackboard:
     def write_feedback(self, value, received_at_s):
         with self._lock:
             sample = StampedValue(value, received_at_s)
+            self._latest_feedback = sample
             if len(self._feedback) == FEEDBACK_QUEUE_CAPACITY:
                 self._feedback.popleft()
                 self._dropped_feedback += 1
@@ -158,6 +160,10 @@ class RuntimeBlackboard:
     def display_status(self):
         with self._lock:
             return self._display, self._status
+
+    def latest_feedback(self):
+        with self._lock:
+            return self._latest_feedback
 
     def take_publication_inputs(self):
         with self._lock:

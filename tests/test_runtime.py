@@ -36,6 +36,7 @@ def test_blackboard_drops_oldest_feedback_and_preserves_terminal_events():
     assert [event.value['event_id'] for event in inputs.terminal_events] == ['state', 'end']
     assert inputs.health.feedback_queue_depth == 0
     assert inputs.health.dropped_feedback == 2
+    assert board.latest_feedback().value == {'sequence': FEEDBACK_QUEUE_CAPACITY + 1}
 
 
 def test_blackboard_returns_stamped_vision_display_and_status():

@@ -19,6 +19,7 @@ from .detector import detect_red_box
 from .blackboard import RuntimeBlackboard
 from .mission import Mission, COMMAND_PERIOD_S
 from .los_telemetry import LosTelemetryScheduler
+from .mavlink_adapter import MavlinkAdapter
 from .publisher import BboxPublisher
 from .receiver import ImageReceiver
 from .runtime_publisher import RuntimePublisher
@@ -114,10 +115,11 @@ class DetectorRuntime:
 
 
 class MissionRuntime:
-    def __init__(self, transport, config, *, bbox_endpoint, image_topic, hover_check=False):
+    def __init__(self, transport, config, *, bbox_endpoint, image_topic, hover_check=False, mavlink_endpoint=None):
         self.transport, self.config = transport, config
         self.bbox_endpoint, self.image_topic = bbox_endpoint, image_topic
         self.hover_check = hover_check
+        self.mavlink_endpoint = mavlink_endpoint
         self.stop = Event()
         self.publisher_stop = Event()
         self.blackboard = RuntimeBlackboard()
@@ -125,8 +127,15 @@ class MissionRuntime:
         self.error = None
         self.threads = []
         self.publisher_thread = None
+        self.mavlink = None
+        self.mavlink_thread = None
 
     def start(self):
+        if self.mavlink_endpoint is not None:
+            self.mavlink = MavlinkAdapter(self.mavlink_endpoint, self.blackboard, self.stop)
+            self.mavlink.open()
+            self.mavlink_thread = Thread(name='bullet-mavlink', target=self._run_mavlink, daemon=True)
+            self.mavlink_thread.start()
         self.publisher_thread = Thread(name='bullet-publisher', target=self._guard,
                                        args=(self.publisher.run,), daemon=True)
         self.publisher_thread.start()
@@ -135,6 +144,12 @@ class MissionRuntime:
             thread = Thread(name=name, target=self._guard, args=(target,), daemon=True)
             self.threads.append(thread)
             thread.start()
+
+    def _run_mavlink(self):
+        try:
+            self.mavlink.run()
+        except Exception:
+            logger.exception('MAVLink telemetry stopped')
 
     def _guard(self, target):
         try:
@@ -331,6 +346,12 @@ class MissionRuntime:
             self.publisher_thread.join(THREAD_JOIN_TIMEOUT_S)
             if self.publisher_thread.is_alive():
                 self.error = f'{self.publisher_thread.name} failed to stop'
+        if self.mavlink_thread is not None:
+            self.mavlink_thread.join(THREAD_JOIN_TIMEOUT_S)
+            if self.mavlink_thread.is_alive():
+                self.error = f'{self.mavlink_thread.name} failed to stop'
+        if self.mavlink is not None:
+            self.mavlink.close()
 
 
 class MissionRunner:
@@ -343,7 +364,8 @@ class MissionRunner:
     def run(self):
         config = NavigatorConfig.from_yaml(self.options.mission_config)
         runtime = MissionRuntime(self.transport, config, bbox_endpoint=self.options.bbox_endpoint,
-                                 image_topic=self.options.topic, hover_check=self.options.hover_check)
+                                 image_topic=self.options.topic, hover_check=self.options.hover_check,
+                                 mavlink_endpoint=self.options.mavlink_endpoint)
         window = 'Bullet app: mission'
         opened = False
         try:

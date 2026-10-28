@@ -41,6 +41,11 @@ and MCAP connects. It must differ from the renderer/physics/control endpoints.
 When changing this port, also change the bbox topic's `endpoint` in
 `../bullet_render/configs/recorder.yaml`.
 
+`--mavlink-endpoint udpout:127.0.0.1:14550` sends MAVLink heartbeat, attitude,
+and barometric altitude for mission runs by default. Override it with another
+`pymavlink` output connection string. It is telemetry-only and does not accept
+MAVLink commands.
+
 Every processed frame emits exactly two ZMQ parts: UTF-8 topic
 `tracking/front/bbox` and a JSON payload using `bullet_msgs:bbox.json`:
 
