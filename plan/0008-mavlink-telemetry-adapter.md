@@ -40,8 +40,8 @@ passed). The excluded adapter test has a pre-existing import of missing
 
 ## Status
 
-Pending
+Implemented
 
 ## Implementation commit
 
-Pending
+`76aa876`
