@@ -40,8 +40,9 @@ execution.
 
 ## Status
 
-Implemented, uncommitted
+Implemented
 
-## Implementation commit
+## Implementation commits
 
-Pending
+- `ffc057d49ac0fa6b35c1dfb04c01638cfd1cb9f6` — Bullet App refactor.
+- `5c3f22195f6103b42ba6d3088ae214cf83d1d085` — workspace lockfile update.
