@@ -4,7 +4,7 @@ from dataclasses import asdict
 import os
 from pathlib import Path
 from bullet_msgs.provenance import revisions
-from threading import Event, Lock, Thread
+from threading import Event, Thread
 import time
 
 import cv2
@@ -17,6 +17,7 @@ from bullet_msgs.control import STATE_TOPIC, validate_state
 from bullet_msgs.scenario import END_TOPIC, validate_end
 from los_tracking import NavigatorConfig
 from .detector import detect_red_box
+from .blackboard import RuntimeBlackboard
 from .mission import Mission, COMMAND_PERIOD_S
 from .los_telemetry import LosTelemetryPublisher
 from .publisher import BboxPublisher
@@ -24,8 +25,9 @@ from .receiver import ImageReceiver
 from .ui import draw_debug
 
 
-MAX_FEEDBACK_BATCH = 64
 FEEDBACK_HWM = 64
+FEEDBACKS_PER_CONTROL_TICK = 4
+TELEMETRY_POLL_TIMEOUT_MS = 50
 THREAD_JOIN_TIMEOUT_S = 3
 CONFIG_TIMEOUT_S = 3
 MSP_RC_TOPIC = b'analysis/app/msp_rc'
@@ -41,6 +43,13 @@ def format_msp_status_before_arm(status):
 
 def msp_status_from_snapshot(snapshot):
     return None if snapshot is None else snapshot[2]
+
+
+def input_diagnostics(health, now_s):
+    return dict(input_feedback_queue_depth=health.feedback_queue_depth,
+                input_dropped_feedback=health.dropped_feedback,
+                input_malformed_messages=health.malformed_messages,
+                input_age_s=None if health.last_received_at_s is None else now_s - health.last_received_at_s)
 
 
 class DetectorRuntime:
@@ -106,13 +115,13 @@ class MissionRuntime:
         self.bbox_endpoint, self.image_topic = bbox_endpoint, image_topic
         self.hover_check = hover_check
         self.stop = Event()
-        self.lock = Lock()
-        self.latest_vision = self.display = self.status = None
+        self.blackboard = RuntimeBlackboard()
         self.error = None
         self.threads = []
 
     def start(self):
-        for name, target in (('bullet-vision', self._vision), ('bullet-mission', self._control)):
+        for name, target in (('bullet-telemetry', self._receive_telemetry),
+                             ('bullet-vision', self._vision), ('bullet-mission', self._control)):
             thread = Thread(name=name, target=self._guard, args=(target,), daemon=True)
             self.threads.append(thread)
             thread.start()
@@ -125,6 +134,39 @@ class MissionRuntime:
             self.error = f'{target.__name__}: {error}'
             self.stop.set()
 
+    def _receive_telemetry(self):
+        with zmq.Context() as context, context.socket(zmq.SUB) as subscriber:
+            subscriber.setsockopt(zmq.LINGER, 0)
+            subscriber.setsockopt(zmq.RCVHWM, FEEDBACK_HWM)
+            subscriber.setsockopt(zmq.MAXMSGSIZE, MAX_FLIGHT_BYTES)
+            for topic in (CONFIG_TOPIC, FEEDBACK_TOPIC, STATE_TOPIC, END_TOPIC):
+                subscriber.setsockopt(zmq.SUBSCRIBE, topic)
+            subscriber.connect(self.transport['telemetry_endpoint'])
+            while not self.stop.is_set():
+                if not subscriber.poll(TELEMETRY_POLL_TIMEOUT_MS):
+                    continue
+                parts = subscriber.recv_multipart()
+                if len(parts) != 2:
+                    self.blackboard.record_malformed()
+                    continue
+                topic, payload = parts
+                self._record_telemetry(topic, payload, time.monotonic())
+
+    def _record_telemetry(self, topic, payload, received_at_s):
+        try:
+            if topic == CONFIG_TOPIC:
+                self.blackboard.write_config(decode(payload, validate_config), received_at_s)
+            elif topic == FEEDBACK_TOPIC:
+                self.blackboard.write_feedback(decode(payload, validate_feedback), received_at_s)
+            elif topic == STATE_TOPIC:
+                self.blackboard.write_state(decode(payload, validate_state), received_at_s)
+            elif topic == END_TOPIC:
+                self.blackboard.write_end(decode(payload, validate_end), received_at_s)
+        except (ValueError, TypeError, UnicodeError):
+            if topic == CONFIG_TOPIC:
+                raise
+            self.blackboard.record_malformed()
+
     def _vision(self):
         receiver = ImageReceiver(self.transport['image_endpoint'], self.image_topic)
         try:
@@ -136,9 +178,7 @@ class MissionRuntime:
                 metadata, image = result
                 bbox = detect_red_box(image)
                 metadata = dict(metadata, processing_completed_us=time.monotonic_ns() // 1000)
-                with self.lock:
-                    self.latest_vision = (metadata, bbox)
-                    self.display = (image, bbox)
+                self.blackboard.write_vision((metadata, bbox), (image, bbox), time.monotonic())
         finally:
             receiver.close()
 
@@ -153,14 +193,8 @@ class MissionRuntime:
         next_msp_telemetry = 0.
         next_msp_summary = 0.
         try:
-            with zmq.Context() as context, context.socket(zmq.SUB) as subscriber, context.socket(zmq.PUB) as commands:
-                for socket in (subscriber, commands):
-                    socket.setsockopt(zmq.LINGER, 0)
-                subscriber.setsockopt(zmq.RCVHWM, FEEDBACK_HWM)
-                subscriber.setsockopt(zmq.MAXMSGSIZE, MAX_FLIGHT_BYTES)
-                for topic in (CONFIG_TOPIC, FEEDBACK_TOPIC, STATE_TOPIC, END_TOPIC):
-                    subscriber.setsockopt(zmq.SUBSCRIBE, topic)
-                subscriber.connect(self.transport['telemetry_endpoint'])
+            with zmq.Context() as context, context.socket(zmq.PUB) as commands:
+                commands.setsockopt(zmq.LINGER, 0)
                 commands.setsockopt(zmq.SNDHWM, 4)
                 commands.bind(self.transport['flight_command_endpoint'])
                 publisher = BboxPublisher(self.bbox_endpoint)
@@ -172,39 +206,22 @@ class MissionRuntime:
                 next_tick = time.monotonic()
                 try:
                     while not self.stop.is_set():
-                        for _ in range(MAX_FEEDBACK_BATCH):
-                            try:
-                                parts = subscriber.recv_multipart(zmq.NOBLOCK)
-                            except zmq.Again:
-                                break
-                            if len(parts) != 2:
-                                continue
-                            try:
-                                if parts[0] == CONFIG_TOPIC:
-                                    platform = decode(parts[1], validate_config)
-                                    mission.configure(platform)
-                                    if platform.get('backend') == 'betaflight' and msp is None:
-                                        from .msp_flight import MspFlight
-                                        msp = MspFlight()
-                                        msp.start()
-                                    last_config = time.monotonic()
-                                elif parts[0] == END_TOPIC:
-                                    mission.complete(decode(parts[1], validate_end))
-                                elif parts[0] == STATE_TOPIC:
-                                    state = decode(parts[1], validate_state)
-                                    if state.get('terminal_result') is not None:
-                                        mission.complete(state['terminal_result'])
-                                elif parts[0] == FEEDBACK_TOPIC:
-                                    packet = decode(parts[1], validate_feedback)
-                                    if packet['source']['measurement_us'] / 1e6 <= time.monotonic():
-                                        mission.observe(packet)
-                            except (ValueError, TypeError, UnicodeError) as error:
-                                if parts[0] == CONFIG_TOPIC:
-                                    raise ValueError(f'incompatible platform: {error}') from error
-                                continue
+                        inputs = self.blackboard.take_control_inputs(FEEDBACKS_PER_CONTROL_TICK)
+                        if inputs.config is not None and inputs.config.received_at_s > last_config:
+                            mission.configure(inputs.config.value)
+                            if inputs.config.value.get('backend') == 'betaflight' and msp is None:
+                                from .msp_flight import MspFlight
+                                msp = MspFlight()
+                                msp.start()
+                            last_config = inputs.config.received_at_s
+                        for event in inputs.terminal_events:
+                            mission.complete(event.value)
+                        for sample in inputs.feedback:
+                            if sample.value['source']['measurement_us'] / 1e6 <= time.monotonic():
+                                mission.observe(sample.value)
                         now = time.monotonic()
-                        with self.lock:
-                            detection = self.latest_vision
+                        detection = None if inputs.vision is None else inputs.vision.value
+                        ingress = input_diagnostics(inputs.health, now)
                         if now - last_config > CONFIG_TIMEOUT_S and mission.running_seen:
                             mission.fail('platform_stale')
                         if msp is not None and mission.identity is not None:
@@ -240,7 +257,8 @@ class MissionRuntime:
                                 image_age_s=None if image_time is None else timing_now - image_time,
                                 image_attitude_offset_s=(None if image_time is None or attitude is None
                                                          else image_time - attitude.timestamp_s),
-                                vision_reason=mission.diagnostics.get('vision_reason'), mission_phase=mission.phase)
+                                vision_reason=mission.diagnostics.get('vision_reason'), mission_phase=mission.phase,
+                                **input_diagnostics(inputs.health, timing_now))
                             packet = dict(schema_version=1, source=mission.feedback['source'], backend='betaflight',
                                 timestamp_kind='host_receipt', firmware=msp.firmware, error=msp.error,
                                 msp_delivery=metrics, sensor_feedback=sensor_metrics,
@@ -267,6 +285,7 @@ class MissionRuntime:
                         los_telemetry.publish(mission, now_s=now)
                         status = mission.status(now)
                         if status is not None:
+                            status['diagnostics'].update(ingress)
                             if detection is not None:
                                 metadata, bbox = detection
                                 status['diagnostics']['latest_image'] = {key: metadata[key] for key in ('session', 'sequence', 'capture_ns', 'source', 'processing_completed_us') if key in metadata}
@@ -277,8 +296,7 @@ class MissionRuntime:
                                 publisher.socket.send_multipart([b'analysis/app/config', json.dumps(snapshot, allow_nan=False).encode()], zmq.NOBLOCK)
                                 next_snapshot = now + 1.
                             publisher.socket.send_multipart([MISSION_TOPIC, json.dumps(status, allow_nan=False).encode()], zmq.NOBLOCK)
-                            with self.lock:
-                                self.status = status
+                            self.blackboard.write_status(status, now)
                         if detection is not None:
                             metadata, bbox = detection
                             key = (metadata['session'], metadata['sequence'])
@@ -333,8 +351,9 @@ class MissionRunner:
             from .status import format_status, status_key
             previous_status = None
             while not runtime.stop.is_set():
-                with runtime.lock:
-                    display, status = runtime.display, runtime.status
+                display, status = runtime.blackboard.display_status()
+                display = None if display is None else display.value
+                status = None if status is None else status.value
                 if status is not None and status_key(status) != previous_status:
                     previous_status = status_key(status)
                     logger.info("Mission {}: {}", status['phase'], format_status(status))

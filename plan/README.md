@@ -6,3 +6,4 @@
 | [0002 MSP RC Scheduler](0002-msp-rc-scheduler.md) | Stream and record latest MSP RC delivery at 50 Hz with a firmware-compatible safe fallback. | Pending | Pending |
 | [0003 Betaflight Takeoff Tuning](0003-betaflight-takeoff-tuning.md) | Calibrate safe Betaflight takeoff and hover PWM in simulation. | Pending | Pending |
 | [0004 MSP Telemetry Scheduler](0004-msp-telemetry-scheduler.md) | Schedule MSP status, attitude, and altitude polling with cached snapshots. | Implemented | `af360c7` |
+| [0005 Runtime Blackboard](0005-runtime-blackboard.md) | Isolate ZMQ reception from mission control with stamped shared runtime state. | Pending | Pending |

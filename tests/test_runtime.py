@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from bullet_app.blackboard import FEEDBACK_QUEUE_CAPACITY, RuntimeBlackboard
 from bullet_app.runtime import format_msp_status_before_arm, msp_status_from_snapshot
 
 
@@ -17,3 +18,34 @@ def test_msp_status_before_arm_reports_unavailable_snapshot():
 
 def test_msp_status_snapshot_can_be_unavailable():
     assert msp_status_from_snapshot(None) is None
+
+
+def test_blackboard_drops_oldest_feedback_and_preserves_terminal_events():
+    board = RuntimeBlackboard()
+    board.write_config({'backend': 'internal'}, 1.)
+    for sequence in range(FEEDBACK_QUEUE_CAPACITY + 2):
+        board.write_feedback({'sequence': sequence}, 2. + sequence)
+    board.write_state({'terminal_result': {'event_id': 'state'}}, 20.)
+    board.write_end({'event_id': 'end'}, 21.)
+
+    inputs = board.take_control_inputs(FEEDBACK_QUEUE_CAPACITY)
+
+    assert inputs.config.value == {'backend': 'internal'}
+    assert [sample.value['sequence'] for sample in inputs.feedback] == list(range(2, FEEDBACK_QUEUE_CAPACITY + 2))
+    assert [event.value['event_id'] for event in inputs.terminal_events] == ['state', 'end']
+    assert inputs.health.feedback_queue_depth == 0
+    assert inputs.health.dropped_feedback == 2
+
+
+def test_blackboard_returns_stamped_vision_display_and_status():
+    board = RuntimeBlackboard()
+    detection, display, status = ('metadata', 'bbox'), ('image', 'bbox'), {'phase': 'READY'}
+    board.write_vision(detection, display, 1.)
+    board.write_status(status, 2.)
+
+    inputs = board.take_control_inputs(0)
+    stamped_display, stamped_status = board.display_status()
+
+    assert inputs.vision.value == detection and inputs.vision.received_at_s == 1.
+    assert stamped_display.value == display and stamped_display.received_at_s == 1.
+    assert stamped_status.value == status and stamped_status.received_at_s == 2.
