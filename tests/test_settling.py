@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from bullet_drone.geometry import from_rpy
-from test_mission import mission, feedback
+from test_mission import betaflight_config, feedback, mission, platform
 
 
 def ready_hover(rate=0., *, hover_check=False):
@@ -90,7 +90,8 @@ def test_betaflight_allows_wider_takeoff_hover_altitude_envelope(backend, altitu
     step = 481
     now = 1000 + step / 240
     if backend:
-        m.configure(dict(m.platform, schema_version=2, backend=backend, attitude_model='imu_complementary'))
+        m.config = betaflight_config()
+        m.configure(dict(platform(m.config), schema_version=2, backend=backend, attitude_model='imu_complementary'))
     m._settling_altitudes.extend((time, altitude) for time, _ in samples)
     m.observe(feedback(step, now, altitude, armed=True))
     m.tick(now_s=now)

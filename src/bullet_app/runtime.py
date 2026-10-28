@@ -28,6 +28,7 @@ MAX_FEEDBACK_BATCH = 64
 FEEDBACK_HWM = 64
 THREAD_JOIN_TIMEOUT_S = 3
 CONFIG_TIMEOUT_S = 3
+MSP_RC_TOPIC = b'analysis/app/msp_rc'
 
 
 def format_msp_status_before_arm(status):
@@ -255,6 +256,12 @@ class MissionRuntime:
                                             'barometer_age={barometer_age_s}; MSP status requests={requests_hz}, '
                                             'responses={responses_hz}'.format(**sensor_metrics, **metrics))
                                 next_msp_summary = timing_now + 1.
+                        if msp is not None and mission.feedback is not None:
+                            for delivery in msp.drain_rc_deliveries():
+                                packet = dict(schema_version=1, source=mission.feedback['source'], backend='betaflight',
+                                              timestamp_kind='host_monotonic', sent_at_us=delivery.sent_at_us,
+                                              connection_generation=delivery.generation, channels=list(delivery.channels))
+                                publisher.socket.send_multipart([MSP_RC_TOPIC, json.dumps(packet).encode()], zmq.NOBLOCK)
                         los_telemetry.publish(mission, now_s=now)
                         status = mission.status(now)
                         if status is not None:

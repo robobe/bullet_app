@@ -1,13 +1,83 @@
 """Application-owned MSP polling and firmware-frame conversion, not physics IO."""
+import heapq
 from threading import Event, Lock, Thread
 import time
 
 from msp_link import Client, FlightCommands, TcpTransport, MspError
 from msp_link.commands import STATUS
+from msp_link.rc import pack_rc
 
 STATUS_PERIOD_S = .1
+ATTITUDE_PERIOD_S = .04
 STALE_S = .2
-DISARMED = (1500, 1500, 1000, 1500, 1000, 2000) + (1000,) * 12
+CONNECTION_WAIT_S = .05
+ERROR_RETRY_S = .05
+THREAD_JOIN_TIMEOUT_S = 2
+RC_MIN_PWM = 1000
+RC_NEUTRAL_PWM = 1500
+RC_MAX_PWM = 2000
+RC_CHANNEL_COUNT = 18
+RC_AETR_CHANNEL_COUNT = 4
+RC_ARM_MODE_CHANNEL_COUNT = 2
+RC_RATE_HZ = 50
+RC_PERIOD_S = 1 / RC_RATE_HZ
+SAFE_RC_COMMAND = (
+    RC_NEUTRAL_PWM, RC_NEUTRAL_PWM, RC_MIN_PWM, RC_NEUTRAL_PWM,
+    RC_MIN_PWM, RC_MAX_PWM,
+) + (RC_MIN_PWM,) * (RC_CHANNEL_COUNT - RC_AETR_CHANNEL_COUNT - RC_ARM_MODE_CHANNEL_COUNT)
+
+
+class RcScheduler:
+    """Streams the latest accepted RC command without mission-loop timing."""
+    def __init__(self, client):
+        self.client = client
+        self.stop = Event()
+        self.lock = Lock()
+        self.command = SAFE_RC_COMMAND
+        self.generation = client.generation
+        self.thread = None
+
+    def start(self):
+        self.thread = Thread(target=self._run, name='msp-rc', daemon=True)
+        self.thread.start()
+
+    def update(self, channels):
+        command = tuple(channels)
+        pack_rc(command)
+        with self.lock:
+            self.command = command
+
+    def reset(self):
+        with self.lock:
+            self.command = SAFE_RC_COMMAND
+            self.generation = self.client.generation
+        self.client.rc.clear()
+
+    def _deliver(self):
+        with self.lock:
+            if not self.client.connected.is_set() or self.generation != self.client.generation:
+                self.command = SAFE_RC_COMMAND
+                self.generation = self.client.generation
+            command = self.command
+        if self.client.connected.is_set():
+            self.client.rc.update(command)
+
+    def _run(self):
+        due = [(time.monotonic(), 'rc')]
+        while not self.stop.is_set():
+            deadline, _ = heapq.heappop(due)
+            if self.stop.wait(max(0., deadline - time.monotonic())):
+                break
+            self._deliver()
+            now = time.monotonic()
+            next_deadline = deadline + (int((now - deadline) / RC_PERIOD_S) + 1) * RC_PERIOD_S
+            heapq.heappush(due, (next_deadline, 'rc'))
+
+    def close(self):
+        self.reset()
+        self.stop.set()
+        if self.thread is not None:
+            self.thread.join(THREAD_JOIN_TIMEOUT_S)
 
 
 class MspFlight:
@@ -16,17 +86,20 @@ class MspFlight:
         self.commands = FlightCommands(self.client)
         self.stop, self.lock = Event(), Lock()
         self.status = None
+        self.attitude = None
         self.identity = None
         self.episode_generation = 0
         self.generation = 0
         self.firmware = None
         self.error = None
         self.thread = None
+        self.rc_scheduler = RcScheduler(self.client)
 
     def start(self):
         self.client.start()
         self.thread = Thread(target=self._poll, name='msp-feedback', daemon=True)
         self.thread.start()
+        self.rc_scheduler.start()
 
     def set_episode(self, identity):
         with self.lock:
@@ -34,14 +107,15 @@ class MspFlight:
                 self.identity = identity
                 self.episode_generation += 1
                 self.status = None
-                self.client.rc.clear()
+                self.attitude = None
+                self.rc_scheduler.reset()
 
     def _poll(self):
-        periods = dict(status=STATUS_PERIOD_S)
+        periods = dict(status=STATUS_PERIOD_S, attitude=ATTITUDE_PERIOD_S)
         due = dict.fromkeys(periods, 0.)
         schedule_identity = None
         while not self.stop.is_set():
-            if not self.client.connected.wait(.05):
+            if not self.client.connected.wait(CONNECTION_WAIT_S):
                 continue
             try:
                 with self.lock:
@@ -83,33 +157,39 @@ class MspFlight:
             except (MspError, TimeoutError, ValueError, OSError) as error:
                 with self.lock:
                     self.error = str(error)
-                self.stop.wait(.05)
+                self.stop.wait(ERROR_RETRY_S)
 
     def snapshot(self):
         with self.lock:
             if not self.client.connected.is_set() or self.generation != self.client.generation:
                 return None
             status = self.status
+            attitude = self.attitude
+            if attitude is not None and time.monotonic() - attitude.received_at > STALE_S:
+                attitude = None
             if status is not None and time.monotonic() - status.received_at > STALE_S:
                 status = None
-            return None, None, status
+            return attitude, None, status
 
     def diagnostics(self, now_s):
         return self.client.request_metrics(STATUS, now_s)
 
+    def drain_rc_deliveries(self):
+        return self.client.drain_rc_deliveries()
+
     def update(self, channels):
         if self.client.connected.is_set() and self.generation == self.client.generation:
-            self.client.rc.update(channels)
+            self.rc_scheduler.update(channels)
 
     def close(self):
-        self.client.rc.clear()
+        self.rc_scheduler.close()
         if self.client.connected.is_set():
             try:
-                self.commands.send_rc(DISARMED)
+                self.commands.send_rc(SAFE_RC_COMMAND)
             except (MspError, TimeoutError):
                 pass
         self.client.rc.clear()
         self.stop.set()
         if self.thread is not None:
-            self.thread.join(2)
+            self.thread.join(THREAD_JOIN_TIMEOUT_S)
         self.client.close()

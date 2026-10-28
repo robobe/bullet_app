@@ -397,8 +397,8 @@ requires a new launch. Process logs stay in
 ### Betaflight sensor and MSP diagnostics
 
 The Betaflight app uses the simulation feedback IMU attitude and barometer
-altitude. MSP polls status at 10 Hz and streams RC commands; it does not poll
-attitude or altitude. `analysis/app/msp.sensor_feedback` reports expected and
+altitude. MSP polls status at 10 Hz, firmware attitude at 25 Hz, and streams RC
+commands; it does not poll altitude. `analysis/app/msp.sensor_feedback` reports expected and
 observed feedback rates, sensor ages, image age, and image-to-attitude alignment.
 `analysis/app/msp.msp_delivery` reports MSP request and response rates and
 transport timing. The console summary prints once per second; MCAP snapshots

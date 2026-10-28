@@ -1,5 +1,5 @@
 """Sensor-only, deterministic takeoff/settle/LOS mission; sockets live in runtime."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from copy import deepcopy
 from collections import deque
 from bullet_msgs.scenario import validate_end
@@ -11,7 +11,7 @@ from bullet_msgs.flight import validate_config, validate_feedback, COMMAND_LIFET
 from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample, BarometerSample,
                           LosNavigator, NavigationInput, ControlDemand, State, TargetObservation)
 from los_tracking.geometry import euler, wrap, world_bearing, box_edges
-from .rc import encode_demand, ANGLE_SCALE_RAD, YAW_RATE_SCALE_RAD_S
+from .rc import calibrate_betaflight_hover, encode_demand, ANGLE_SCALE_RAD, YAW_RATE_SCALE_RAD_S
 from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_DURATION_S,
                      YAW_SETTLE_RATE_RAD_S, TARGET_CENTER_TOLERANCE_PX, centering_command, ANGLE_EPSILON_RAD)
 
@@ -35,6 +35,10 @@ FEEDBACK_TIMEOUT_S = 0.1
 COMMAND_PERIOD_S = 0.01
 # Leave one tick for scheduling jitter and transport after the next control tick.
 COMMAND_HORIZON_S = 2 * COMMAND_PERIOD_S
+TAKEOFF_SPOOL_ASCENT_M = .25
+TAKEOFF_SPOOL_MIN_VERTICAL_SPEED_M_S = .1
+TAKEOFF_SPOOL_TIMEOUT_S = 2.
+TAKEOFF_PWM_MIN = 1050
 DISARMED_AETR = ControlDemand(0., 0., 0., 0.)
 
 
@@ -59,7 +63,7 @@ class Mission:
         self.navigator = LosNavigator(self.config)
         self.datum = self.goal = None
         self.takeoff_height_m = TAKEOFF_HEIGHT_M
-        self.started_sim = self.settled_sim = self.hover_completed_sim = self.hover_completed_us = None
+        self.started_sim = self.spool_started_sim = self.settled_sim = self.hover_completed_sim = self.hover_completed_us = None
         self.last_step = -1
         self.last_input = NavigationInput()
         self.nav_result = None
@@ -82,6 +86,10 @@ class Mission:
             raise ValueError('platform/control profile mismatch')
         if platform['aetr_channels'] != [1, 2, 3, 4] or (platform['arm_channel'], platform['mode_channel']) != (5, 6):
             raise ValueError('unsupported RC mapping')
+        if platform.get('backend') == 'betaflight':
+            tuning = self.config.tuning
+            if any(value < TAKEOFF_PWM_MIN for value in (tuning.betaflight_takeoff_pwm, tuning.betaflight_hover_pwm)):
+                raise ValueError('Betaflight requires calibrated takeoff and hover PWM')
         camera = platform['camera']
         advertised = CameraCalibration.from_horizontal_fov(camera['width_px'], camera['height_px'], radians(camera['fov_x_deg']))
         if any(not isclose(getattr(c, k), getattr(advertised, k), rel_tol=1e-8) for k in ('width_px', 'height_px', 'fx_px', 'fy_px', 'cx_px', 'cy_px')) or c.camera_to_body_xyzw != advertised.camera_to_body_xyzw:
@@ -172,6 +180,7 @@ class Mission:
         now_us = int(now_s * 1e6)
         active = False
         armed = False
+        spool_command = False
         command = DISARMED_AETR
         lifetime_us = COMMAND_LIFETIME_US
         if f['state'] == 'stopped' and f['reason'] == 'target_hit':
@@ -201,12 +210,14 @@ class Mission:
                         if self.arm_sequence is None:
                             self.arm_sequence = self.sequence + 1
                         if f['armed'] and f['mode'] == 'angle' and f['last_applied_sequence'] >= self.arm_sequence:
-                            self.phase, self.reason = 'TAKEOFF', 'climbing'
+                            self.phase = 'TAKEOFF_SPOOL' if self.platform.get('backend') == 'betaflight' else 'TAKEOFF'
+                            self.reason = 'awaiting_positive_climb' if self.phase == 'TAKEOFF_SPOOL' else 'climbing'
+                            self.spool_started_sim = sim if self.phase == 'TAKEOFF_SPOOL' else None
                     else:
                         armed = False
                         self.arm_sequence = None
                         self.reason = 'waiting_betaflight_prearm'
-                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH', 'LOS_COMMIT'):
+                if self.phase in ('TAKEOFF_SPOOL', 'TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH', 'LOS_COMMIT'):
                     armed = True
                     if not self.hold.ready(now_s):
                         attitude = self.last_input.attitude
@@ -236,6 +247,13 @@ class Mission:
                             self.reason = result.reason
                     else:
                         command = self._hold_tick(now_s, detection)
+                        if self.phase == 'TAKEOFF_SPOOL':
+                            spool_command = True
+                            if (self.relative_altitude >= TAKEOFF_SPOOL_ASCENT_M
+                                    and self.vertical_speed >= TAKEOFF_SPOOL_MIN_VERTICAL_SPEED_M_S):
+                                self.phase, self.reason = 'TAKEOFF', 'climbing'
+                            elif sim - self.spool_started_sim >= TAKEOFF_SPOOL_TIMEOUT_S:
+                                self.fail('takeoff_spool_timeout')
                 if self.phase in ('SENSOR_WARMUP', 'ARMING') and sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
                     self.fail('warmup_or_arm_timeout')
         else:
@@ -247,6 +265,10 @@ class Mission:
             self.fail('command_expired')
             active, armed, command, lifetime_us = False, False, DISARMED_AETR, COMMAND_LIFETIME_US
         encoded = encode_demand(command, self.config, backend=self.platform.get("backend", "internal"))
+        if self.platform.get('backend') == 'betaflight':
+            encoded = replace(encoded, throttle=calibrate_betaflight_hover(encoded.throttle, self.config))
+            if spool_command and active:
+                encoded = replace(encoded, throttle=max(encoded.throttle, self.config.tuning.betaflight_takeoff_pwm))
         channels = [*encoded.as_tuple(), 2000 if armed else 1000, 2000, *([1000] * 12)]
         self.sequence += 1
         return dict(schema_version=1, physics_id=source['physics_id'], episode_id=source['episode_id'], app_id=self.app_id,

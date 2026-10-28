@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from bullet_app.search import YawSearch
 from bullet_app.los_telemetry import snapshot
-from test_mission import mission, feedback
+from test_mission import betaflight_config, feedback, mission, platform
 
 
 def tick(m, step, *, yaw=0., bbox=None, metadata=None, altitude=20., episode='episode'):
@@ -91,7 +91,8 @@ def test_unaligned_target_never_stops_scan():
 
 def test_betaflight_aligns_image_across_recorded_attitude_gap():
     m = mission()
-    m.configure(dict(m.platform, schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    m.config = betaflight_config()
+    m.configure(dict(platform(m.config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     m.observe(feedback(1, 1000., 20., armed=True))
     m.observe(feedback(2, 1000.108, 20., armed=True))
     m.hover_completed_us = int(999.9e6)

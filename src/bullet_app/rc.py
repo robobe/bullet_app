@@ -58,7 +58,23 @@ def encode_demand(demand, config, *, backend='internal'):
     requested = degrees(clamp(abs(demand.yaw_rate_rad_s), 0., config.tuning.yaw_rate_limit_rad_s))
     stick = (-70 + sqrt(70**2 + 2400 * requested)) / 1200
     yaw = round(RC_CENTRE + RC_HALF_RANGE * (stick if demand.yaw_rate_rad_s >= 0 else -stick))
-    fraction = sqrt(clamp(demand.thrust_n / config.vehicle.max_thrust_n, 0., 1.))
-    stick_throttle = clamp((fraction - IDLE_FRACTION) / (1 - IDLE_FRACTION), 0., 1.)
-    throttle = RC_MIN if demand.thrust_n == 0 else round(MIN_CHECK + (2000 - MIN_CHECK) * stick_throttle)
+    throttle = betaflight_throttle(demand.thrust_n, config.vehicle.max_thrust_n)
     return RcChannels(channels.roll, channels.pitch, throttle, yaw)
+
+
+def betaflight_throttle(thrust_n, max_thrust_n):
+    fraction = sqrt(clamp(thrust_n / max_thrust_n, 0., 1.))
+    stick_throttle = clamp((fraction - IDLE_FRACTION) / (1 - IDLE_FRACTION), 0., 1.)
+    return RC_MIN if thrust_n == 0 else round(MIN_CHECK + (2000 - MIN_CHECK) * stick_throttle)
+
+
+def calibrate_betaflight_hover(throttle, config):
+    """Offset Betaflight throttle around its calibrated level-hover point."""
+    if throttle == RC_MIN:
+        return RC_MIN
+    hover_pwm = config.tuning.betaflight_hover_pwm
+    if hover_pwm == 0:
+        return throttle
+    nominal_hover_pwm = betaflight_throttle(config.vehicle.mass_kg * config.vehicle.gravity_m_s2,
+                                             config.vehicle.max_thrust_n)
+    return round(clamp(throttle + hover_pwm - nominal_hover_pwm, MIN_CHECK, 2000))

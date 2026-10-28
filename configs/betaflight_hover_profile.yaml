@@ -87,6 +87,10 @@ tuning:
   vertical_ki_n_m: 0.2
   # Altitude-loop integral limit in N. Usage: cap accumulated thrust correction.
   vertical_integral_limit_n: 5.0
+  # Betaflight-only minimum throttle during post-arm spool-up in PWM; tuned for this 1 kg simulated racer.
+  betaflight_takeoff_pwm: 1700
+  # Betaflight-only calibrated level-hover throttle in PWM; offsets the physical gravity feed-forward.
+  betaflight_hover_pwm: 1500
   # Sensor filtering, freshness, and command delivery.
 # ********************
 # SENSOR FILTERING AND FRESHNESS

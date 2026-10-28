@@ -1,5 +1,6 @@
 """Mission transitions and a real sensor-only PyBullet takeoff."""
 from pathlib import Path
+from dataclasses import replace
 from math import radians
 from types import SimpleNamespace
 
@@ -37,6 +38,11 @@ def mission(*, hover_check=False):
     return m
 
 
+def betaflight_config():
+    config = NavigatorConfig.from_yaml(PROFILE)
+    return replace(config, tuning=replace(config.tuning, betaflight_takeoff_pwm=1700, betaflight_hover_pwm=1550))
+
+
 def test_ready_warmup_arm_confirmation_and_stale_freeze():
     m = mission()
     m.observe(feedback(0, 1000., 4., state='stopped'))
@@ -66,7 +72,7 @@ def test_profile_mismatch_refuses_readiness():
 
 
 def test_betaflight_stopped_readiness_uses_true_rc_minimum():
-    config = NavigatorConfig.from_yaml(PROFILE)
+    config = betaflight_config()
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     m.observe(feedback(0, 1000., 0., state='stopped'))
@@ -75,7 +81,7 @@ def test_betaflight_stopped_readiness_uses_true_rc_minimum():
 
 
 def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
-    config = NavigatorConfig.from_yaml(PROFILE)
+    config = betaflight_config()
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     command = None
@@ -101,12 +107,39 @@ def test_betaflight_waits_for_prearm_clear_then_raises_aux1():
     m.observe_estimates((SimpleNamespace(roll_rad=0., pitch_rad=0., yaw_rad=0., received_at=now),
                          SimpleNamespace(altitude_m=0., vertical_speed_m_s=0., received_at=now),
                          SimpleNamespace(armed=True, arming_disabled_flags=0)))
-    m.tick(now_s=now)
-    assert m.phase == 'TAKEOFF'
+    spool = m.tick(now_s=now)
+    assert m.phase == 'TAKEOFF_SPOOL'
+    assert spool['channels'][2] >= config.tuning.betaflight_takeoff_pwm
+
+
+def test_betaflight_spool_requires_ascent_and_faults_on_timeout():
+    config = betaflight_config()
+    m = Mission(config, app_id='app')
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    m.observe(feedback(1, 1000., 0., armed=True, applied=1))
+    m.running_seen, m.phase, m.spool_started_sim = True, 'TAKEOFF_SPOOL', 0.
+    m.hold.ready = lambda _: True
+
+    def climbed(*_):
+        m.relative_altitude, m.vertical_speed = .25, .1
+        return ControlDemand(0., 0., 0., 0.)
+
+    m._hold_tick = climbed
+    command = m.tick(now_s=1000.)
+    assert m.phase == 'TAKEOFF' and command['channels'][2] >= config.tuning.betaflight_takeoff_pwm
+
+    m.phase, m.spool_started_sim = 'TAKEOFF_SPOOL', 0.
+    m.relative_altitude, m.vertical_speed = 0., 0.
+    m._hold_tick = lambda *_: ControlDemand(0., 0., 0., 0.)
+    timed_out = feedback(481, 1002.01, 0., armed=True, applied=command['sequence'])
+    m.observe(timed_out)
+    command = m.tick(now_s=1002.01)
+    assert m.phase == 'FAULT' and m.reason == 'takeoff_spool_timeout'
+    assert not command['active'] and command['channels'][2] == 1000
 
 
 def test_betaflight_tolerates_recorded_msp_delay():
-    config = NavigatorConfig.from_yaml(PROFILE)
+    config = betaflight_config()
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     for step in range(1, 13):
@@ -122,7 +155,7 @@ def test_betaflight_tolerates_recorded_msp_delay():
 
 
 def test_betaflight_reports_stale_simulation_feedback():
-    config = NavigatorConfig.from_yaml(PROFILE)
+    config = betaflight_config()
     m = Mission(config, app_id='app')
     m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     m.observe(feedback(1, 1000., 0., armed=True))
@@ -376,8 +409,9 @@ def test_status_records_explicit_takeoff_goal_and_barometer_datum():
 
 
 def test_betaflight_keeps_sensor_feedback_and_uses_msp_only_for_status():
-    m = mission()
-    m.configure(dict(m.platform, schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    config = betaflight_config()
+    m = Mission(config, app_id='app')
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     m.observe(feedback(0, 1000., 0., state='stopped'))
     sensor_attitude = m.last_input.attitude
     m.observe_estimates((None, None, SimpleNamespace(armed=True, arming_disabled_flags=0)))
@@ -391,8 +425,9 @@ def test_betaflight_keeps_sensor_feedback_and_uses_msp_only_for_status():
 
 
 def test_sensor_diagnostics_measure_feedback_rate_and_age():
-    m = mission()
-    m.configure(dict(m.platform, schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
+    config = betaflight_config()
+    m = Mission(config, app_id='app')
+    m.configure(dict(platform(config), schema_version=2, backend='betaflight', attitude_model='imu_complementary'))
     first = 1000.
     m.observe(feedback(0, first, 1.))
     m.observe(feedback(1, first + 1 / 120, 1.))
