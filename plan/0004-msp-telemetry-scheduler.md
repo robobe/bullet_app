@@ -14,8 +14,9 @@ one application-owned scheduler. Publish cached current state through
    preserving safe latest-value RC delivery and reconnect handling.
 3. Keep `MspFlight` as the lifecycle facade and make `snapshot()` return the
    stale-filtered cached attitude, altitude, and status state.
-4. Update focused scheduler tests and retain runtime consumption through the
-   existing snapshot interface.
+4. Report per-command status, attitude, and altitude delivery rates in MSP
+   diagnostics, then update focused tests and retain runtime consumption
+   through the existing snapshot interface.
 
 ## Interface changes
 
@@ -23,6 +24,8 @@ one application-owned scheduler. Publish cached current state through
   tuple member.
 - `RcScheduler` is replaced internally by `MspScheduler`; no application
   runtime interface changes.
+- `msp_delivery` retains its status metrics and adds nested `attitude` and
+  `altitude` metrics with the same request/response fields.
 
 ## Verification
 
@@ -35,7 +38,7 @@ Passed: `uv run --locked --package bullet-app pytest -q --ignore=tests/test_rc_a
 - Status remains at 10 Hz, attitude is 50 Hz, and altitude is 20 Hz.
 - Samples older than 0.2 seconds and all disconnected state are omitted from
   snapshots.
-- No configuration, dependency, or telemetry-schema changes are introduced.
+- No configuration or dependency changes are introduced.
 
 ## Status
 

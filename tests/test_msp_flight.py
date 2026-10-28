@@ -5,7 +5,7 @@ import time
 
 from bullet_app.msp_flight import (ALTITUDE_PERIOD_S, ATTITUDE_PERIOD_S,
                                    MspFlight, SAFE_RC_COMMAND, STATUS_PERIOD_S)
-from msp_link.commands import STATUS
+from msp_link.commands import ALTITUDE, ATTITUDE, STATUS
 
 
 FIRMWARE = dict(variant=b'BTFL', version=bytes((26, 6, 2)))
@@ -52,8 +52,8 @@ def test_scheduler_requests_all_telemetry_and_snapshot_includes_altitude():
     assert flight.snapshot() == (attitude, altitude, status)
     flight.scheduler.attitude = SimpleNamespace(received_at=0.)
     assert flight.snapshot() == (None, altitude, status)
-    flight.diagnostics(1.)
-    assert metrics_calls == [STATUS]
+    assert flight.diagnostics(1.) == dict(attitude={}, altitude={})
+    assert metrics_calls == [STATUS, ATTITUDE, ALTITUDE]
 
 
 def test_scheduler_uses_requested_telemetry_periods():

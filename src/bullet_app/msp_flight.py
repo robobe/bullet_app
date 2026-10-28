@@ -4,7 +4,7 @@ from threading import Event, Lock, Thread
 import time
 
 from msp_link import Client, FlightCommands, TcpTransport, MspError
-from msp_link.commands import STATUS
+from msp_link.commands import ALTITUDE, ATTITUDE, STATUS
 from msp_link.rc import pack_rc
 
 STATUS_PERIOD_S = .1
@@ -175,7 +175,10 @@ class MspFlight:
         return self.scheduler.snapshot()
 
     def diagnostics(self, now_s):
-        return self.client.request_metrics(STATUS, now_s)
+        metrics = self.client.request_metrics(STATUS, now_s)
+        metrics['attitude'] = self.client.request_metrics(ATTITUDE, now_s)
+        metrics['altitude'] = self.client.request_metrics(ALTITUDE, now_s)
+        return metrics
 
     def drain_rc_deliveries(self):
         return self.client.drain_rc_deliveries()

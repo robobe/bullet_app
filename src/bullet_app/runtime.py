@@ -254,7 +254,9 @@ class MissionRuntime:
                                 logger.info('Sim sensors: feedback={observed_hz:.1f}/{expected_hz:.1f} Hz, '
                                             'age={feedback_age_s}, attitude_age={attitude_age_s}, '
                                             'barometer_age={barometer_age_s}; MSP status requests={requests_hz}, '
-                                            'responses={responses_hz}'.format(**sensor_metrics, **metrics))
+                                            'responses={responses_hz}, attitude requests={attitude[requests_hz]}, '
+                                            'responses={attitude[responses_hz]}, altitude requests={altitude[requests_hz]}, '
+                                            'responses={altitude[responses_hz]}'.format(**sensor_metrics, **metrics))
                                 next_msp_summary = timing_now + 1.
                         if msp is not None and mission.feedback is not None:
                             for delivery in msp.drain_rc_deliveries():
