@@ -18,12 +18,14 @@ Expose the yaw-search deadline in navigator tuning and set shipped profiles to
 
 ## Verification
 
-Pending
+Passed: `uv run --locked --package bullet-app pytest -q --ignore=tests/test_rc_adapter.py`
+(144 passed); `uv run --locked --package los-tracking pytest -q tests/test_contracts.py`
+(29 passed).
 
 ## Status
 
-Pending
+Implemented
 
 ## Implementation commit
 
-Pending
+`6ace504` (`bullet_app`), `93cb08d` (`los_tracking`), `f3d0d74` (workspace profiles)
