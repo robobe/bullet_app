@@ -7,3 +7,5 @@
 | [0003 Betaflight Takeoff Tuning](0003-betaflight-takeoff-tuning.md) | Calibrate safe Betaflight takeoff and hover PWM in simulation. | Pending | Pending |
 | [0004 MSP Telemetry Scheduler](0004-msp-telemetry-scheduler.md) | Schedule MSP status, attitude, and altitude polling with cached snapshots. | Implemented | `af360c7` |
 | [0005 Runtime Blackboard](0005-runtime-blackboard.md) | Isolate ZMQ reception from mission control with stamped shared runtime state. | Implemented | `c95784a` |
+| [0006 Runtime Publisher](0006-runtime-publisher.md) | Isolate ZMQ publication from mission control with scheduled shared output state. | Implemented | `0e440ed` |
+| [0007 MSP Analysis Schema Compatibility](0007-msp-analysis-schema-compatibility.md) | Keep current MSP diagnostics compatible with strict MCAP recording schemas. | Implemented | `2aa461a` (`bullet_msgs`), `4f2be3e` (`mcap_bagger`) |
