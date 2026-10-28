@@ -87,3 +87,35 @@ class LosTelemetryPublisher:
             skipped = max(1, floor((now_s + TIME_EPSILON_S - self.next_sample_s) / PERIOD_S) + 1)
             self.next_sample_s += skipped * PERIOD_S
         return packet
+
+
+class LosTelemetryScheduler:
+    """Prepare rate-limited LOS packets without owning a transport."""
+    def __init__(self):
+        self.sequence = 0
+        self.last_key = None
+        self.next_sample_s = None
+        self.last_now_s = None
+
+    def sample(self, mission, *, now_s, shutdown=False):
+        if self.last_now_s is not None and now_s < self.last_now_s:
+            raise ValueError('LOS telemetry clock moved backwards')
+        self.last_now_s = now_s
+        packet = snapshot(mission, now_s=now_s, sequence=self.sequence + 1, shutdown=shutdown)
+        if packet is None:
+            return None
+        source = packet['source']
+        key = (source['physics_id'], source['episode_id'], source['stream_id'], packet['mission_phase'],
+               packet['navigator_state'], packet['stage'], packet['reason'], packet['active'])
+        changed = key != self.last_key
+        due = packet['active'] and (self.next_sample_s is None or now_s + TIME_EPSILON_S >= self.next_sample_s)
+        if not changed and not due:
+            return None
+        self.sequence += 1
+        self.last_key = key
+        if changed or self.next_sample_s is None:
+            self.next_sample_s = now_s + PERIOD_S
+        else:
+            skipped = max(1, floor((now_s + TIME_EPSILON_S - self.next_sample_s) / PERIOD_S) + 1)
+            self.next_sample_s += skipped * PERIOD_S
+        return packet

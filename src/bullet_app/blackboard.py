@@ -6,6 +6,7 @@ from typing import Any
 
 
 FEEDBACK_QUEUE_CAPACITY = 8
+OUTPUT_EVENT_QUEUE_CAPACITY = 64
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,25 @@ class ControlInputs:
     health: ReceiverHealth
 
 
+@dataclass(frozen=True)
+class PublicationHealth:
+    queue_depths: dict[str, int]
+    dropped_events: dict[str, int]
+
+
+@dataclass(frozen=True)
+class PublicationInputs:
+    command: StampedValue | None
+    status: StampedValue | None
+    config_snapshot: StampedValue | None
+    msp_snapshot: StampedValue | None
+    bbox_events: tuple[StampedValue, ...]
+    los_events: tuple[StampedValue, ...]
+    msp_delivery_events: tuple[StampedValue, ...]
+    final_disarm: StampedValue | None
+    health: PublicationHealth
+
+
 class RuntimeBlackboard:
     """Own snapshots shared by receiver, vision, control, and display workers."""
     def __init__(self):
@@ -39,6 +59,9 @@ class RuntimeBlackboard:
         self._vision = self._display = self._status = None
         self._feedback = deque()
         self._terminal_events = deque()
+        self._command = self._config_snapshot = self._msp_snapshot = self._final_disarm = None
+        self._output_events = {name: deque() for name in ('bbox', 'los', 'msp_delivery')}
+        self._dropped_events = {name: 0 for name in self._output_events}
         self._last_received_at_s = None
         self._malformed_messages = self._dropped_feedback = 0
 
@@ -81,6 +104,47 @@ class RuntimeBlackboard:
         with self._lock:
             self._status = StampedValue(value, received_at_s)
 
+    def write_command(self, value, received_at_s):
+        with self._lock:
+            self._command = StampedValue(value, received_at_s)
+
+    def write_config_snapshot(self, value, received_at_s):
+        with self._lock:
+            self._config_snapshot = StampedValue(value, received_at_s)
+
+    def write_msp_snapshot(self, value, received_at_s):
+        with self._lock:
+            self._msp_snapshot = StampedValue(value, received_at_s)
+
+    def write_final_disarm(self, value, received_at_s):
+        with self._lock:
+            self._final_disarm = StampedValue(value, received_at_s)
+
+    def acknowledge_final_disarm(self):
+        with self._lock:
+            self._final_disarm = None
+
+    def enqueue_bbox(self, value, received_at_s):
+        self._enqueue('bbox', value, received_at_s)
+
+    def enqueue_los(self, value, received_at_s):
+        self._enqueue('los', value, received_at_s)
+
+    def enqueue_msp_delivery(self, value, received_at_s):
+        self._enqueue('msp_delivery', value, received_at_s)
+
+    def _enqueue(self, name, value, received_at_s):
+        with self._lock:
+            events = self._output_events[name]
+            if len(events) == OUTPUT_EVENT_QUEUE_CAPACITY:
+                events.popleft()
+                self._dropped_events[name] += 1
+            events.append(StampedValue(value, received_at_s))
+
+    def record_output_drop(self, name):
+        with self._lock:
+            self._dropped_events[name] += 1
+
     def take_control_inputs(self, feedback_limit):
         with self._lock:
             feedback = tuple(self._feedback.popleft()
@@ -94,3 +158,19 @@ class RuntimeBlackboard:
     def display_status(self):
         with self._lock:
             return self._display, self._status
+
+    def take_publication_inputs(self):
+        with self._lock:
+            queue_depths = {name: len(queue) for name, queue in self._output_events.items()}
+            events = {name: tuple(queue) for name, queue in self._output_events.items()}
+            for queue in self._output_events.values():
+                queue.clear()
+            health = PublicationHealth(queue_depths, dict(self._dropped_events))
+            return PublicationInputs(self._command, self._status, self._config_snapshot, self._msp_snapshot,
+                                     events['bbox'], events['los'], events['msp_delivery'], self._final_disarm,
+                                     health)
+
+    def publication_health(self):
+        with self._lock:
+            return PublicationHealth({name: len(queue) for name, queue in self._output_events.items()},
+                                     dict(self._dropped_events))

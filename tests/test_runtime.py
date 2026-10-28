@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
-from bullet_app.blackboard import FEEDBACK_QUEUE_CAPACITY, RuntimeBlackboard
+from bullet_app.blackboard import (FEEDBACK_QUEUE_CAPACITY, OUTPUT_EVENT_QUEUE_CAPACITY,
+                                   RuntimeBlackboard)
 from bullet_app.runtime import format_msp_status_before_arm, msp_status_from_snapshot
 
 
@@ -49,3 +50,29 @@ def test_blackboard_returns_stamped_vision_display_and_status():
     assert inputs.vision.value == detection and inputs.vision.received_at_s == 1.
     assert stamped_display.value == display and stamped_display.received_at_s == 1.
     assert stamped_status.value == status and stamped_status.received_at_s == 2.
+
+
+def test_blackboard_keeps_latest_publication_state_and_bounded_events():
+    board = RuntimeBlackboard()
+    board.write_command({'sequence': 1}, 1.)
+    board.write_command({'sequence': 2}, 2.)
+    board.write_status({'sequence': 3}, 3.)
+    board.write_config_snapshot({'sequence': 4}, 4.)
+    board.write_msp_snapshot({'sequence': 5}, 5.)
+    board.write_final_disarm({'sequence': 6}, 6.)
+    for sequence in range(OUTPUT_EVENT_QUEUE_CAPACITY + 1):
+        board.enqueue_los({'sequence': sequence}, 7. + sequence)
+
+    inputs = board.take_publication_inputs()
+
+    assert inputs.command.value == {'sequence': 2}
+    assert inputs.status.value == {'sequence': 3}
+    assert inputs.config_snapshot.value == {'sequence': 4}
+    assert inputs.msp_snapshot.value == {'sequence': 5}
+    assert inputs.final_disarm.value == {'sequence': 6}
+    assert [event.value['sequence'] for event in inputs.los_events] == list(range(1, OUTPUT_EVENT_QUEUE_CAPACITY + 1))
+    assert inputs.health.queue_depths['los'] == OUTPUT_EVENT_QUEUE_CAPACITY
+    assert inputs.health.dropped_events['los'] == 1
+
+    board.acknowledge_final_disarm()
+    assert board.take_publication_inputs().final_disarm is None
