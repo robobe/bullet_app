@@ -40,8 +40,8 @@ Passed: `uv run --locked --package bullet-app pytest -q --ignore=tests/test_rc_a
 
 ## Status
 
-Pending
+Implemented
 
 ## Implementation commit
 
-Pending
+`c95784a`
