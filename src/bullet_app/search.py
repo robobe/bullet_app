@@ -5,7 +5,6 @@ from los_tracking.geometry import wrap
 
 
 SEARCH_RATE_RAD_S = radians(15)
-SEARCH_TIMEOUT_S = 34.0
 SEARCH_CIRCLE_RAD = 2 * pi
 YAW_SETTLE_DURATION_S = 0.3
 YAW_SETTLE_RATE_RAD_S = radians(5)

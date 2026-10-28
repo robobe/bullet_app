@@ -12,7 +12,7 @@ from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample
                           LosNavigator, NavigationInput, ControlDemand, State, TargetObservation)
 from los_tracking.geometry import euler, wrap, world_bearing, box_edges
 from .rc import calibrate_betaflight_hover, encode_demand, ANGLE_SCALE_RAD, YAW_RATE_SCALE_RAD_S
-from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_DURATION_S,
+from .search import (YawSearch, SEARCH_RATE_RAD_S, YAW_SETTLE_DURATION_S,
                      YAW_SETTLE_RATE_RAD_S, TARGET_CENTER_TOLERANCE_PX, centering_command, ANGLE_EPSILON_RAD)
 
 
@@ -289,6 +289,7 @@ class Mission:
 
     def _hold_tick(self, now_s, detection):
         sim = self.feedback['source']['simulation_time_s']
+        t = self.config.tuning
         now_us = int(now_s * 1e6)
         altitude, vz = self.hold.estimate(now_s)
         self.relative_altitude, self.vertical_speed = altitude - self.datum, vz
@@ -364,7 +365,7 @@ class Mission:
                         elif sim - self.search.settled_sim >= YAW_SETTLE_DURATION_S:
                             self.hold.set_heading(yaw)
                             begin_los = True
-            if self.search.started_sim is not None and self.search.elapsed(sim) >= SEARCH_TIMEOUT_S:
+            if self.search.started_sim is not None and self.search.elapsed(sim) >= t.yaw_search_timeout_s:
                 self.fail('search_timeout')
                 begin_los = False
             if self.phase == 'YAW_SEARCH':

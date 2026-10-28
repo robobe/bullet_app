@@ -1,4 +1,5 @@
 """Deterministic measured search, qualification, braking and LOS handoff."""
+from dataclasses import replace
 from math import cos, sin, radians, degrees
 from types import SimpleNamespace
 
@@ -162,6 +163,7 @@ def test_settling_requires_continuous_yaw_and_altitude_dwell():
 
 def test_stalled_search_timeout_reset_and_stale_watchdog():
     m, step = after_hover()
+    m.config = replace(m.config, tuning=replace(m.config.tuning, yaw_search_timeout_s=5.))
     tick(m, step + 1)
     for step in range(step + 2, step + 8500):
         rc = tick(m, step)

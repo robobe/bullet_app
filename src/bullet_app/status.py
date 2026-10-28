@@ -8,7 +8,7 @@ REASON_MESSAGES = {
     'settling_centered_target': 'target centered; stopping and settling yaw',
     'settling_yaw': 'target found; braking and settling yaw',
     'search_exhausted': 'no usable target found in one full yaw circle',
-    'search_timeout': 'yaw search exceeded its 34 s deadline',
+    'search_timeout': 'yaw search exceeded its configured deadline',
     'stale_or_foreign_image': 'waiting for a fresh image from this episode',
     'no_target': 'no target detected',
     'not_observed': 'waiting for target observations',

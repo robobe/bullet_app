@@ -252,7 +252,7 @@ def test_sensor_only_physics_takeoff_hover_yaw_search(target_found, noisy_profil
         else:
             assert m.reason == 'search_exhausted', (m.phase, m.reason, m.relative_altitude, m.vertical_speed)
             assert m.search.swept_rad >= radians(360)
-            assert m.search.elapsed(obs.ground_truth.simulation_time_s) < 34.
+            assert m.search.elapsed(obs.ground_truth.simulation_time_s) < m.config.tuning.yaw_search_timeout_s
         assert abs(m.relative_altitude - 20.) < .25
         assert obs.ground_truth.simulation_time_s < 60
         assert max(abs(v) for v in obs.ground_truth.position_m[:2]) < .1

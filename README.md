@@ -262,7 +262,7 @@ filter/controller state to LOS. Only images captured after settling can enter
 LOS acquisition, which still needs its normal dwell before approach. The drone
 does not return to its original heading, and yaw continues to hold the new
 heading during approach rather than center the bbox. A full circle without a
-usable target latches `search_exhausted`; **34 simulation seconds**, including
+usable target latches `search_exhausted`; **60 simulation seconds** by default, including
 centering and settling interruptions, latches `search_timeout` if the scan cannot finish.
 Both withdraw active RC and freeze the episode until a new Start/Reset.
 
@@ -287,7 +287,7 @@ and tolerance are named constants in `bullet_app/search.py` for later tuning.
 
 Once centered and settled, save the new heading and run normal LOS acquisition
 using new post-settle images. Yaw centering does not continue during approach.
-The existing one-circle/34 s bounds and watchdogs remain active. Mission
+The existing one-circle/60 s default bound and watchdogs remain active. Mission
 diagnostics add `target_center_x_px`, `image_center_x_px`, `target_error_x_px`,
 `target_center_tolerance_px` and `target_centered`; the commanded search yaw
 rate now reports the actual centering reference as well as the blind-scan rate.
