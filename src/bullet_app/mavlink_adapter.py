@@ -1,10 +1,13 @@
 """Publish latest mission feedback as standard MAVLink telemetry."""
 import time
+from threading import Event
 
 from los_tracking.geometry import euler
 from pymavlink import mavutil
 from bullet_msgs.status_messages import (MAV_SEVERITY_ERROR, STATUS_MESSAGE_BY_KEY,
                                          status_text_chunks)
+from bullet_msgs.mavlink_control import (RELOAD_PROFILE_ACK_ACCEPTED, RELOAD_PROFILE_ACK_DENIED,
+                                         RELOAD_PROFILE_COMMAND, RELOAD_PROFILE_PARAMETER)
 from .status import format_status, status_key
 
 
@@ -25,23 +28,38 @@ def mavlink_attitude(orientation_xyzw):
 
 class MavlinkAdapter:
     """Own a publish-only MAVLink connection and read feedback from the blackboard."""
-    def __init__(self, endpoint, blackboard, stop, *, connection_factory=mavutil.mavlink_connection,
+    def __init__(self, endpoint, blackboard, stop, *, control_endpoint=None,
+                 connection_factory=mavutil.mavlink_connection,
                  clock=time.monotonic):
         self.endpoint = endpoint
+        self.control_endpoint = control_endpoint
         self.blackboard = blackboard
         self.stop = stop
         self.connection_factory = connection_factory
         self.clock = clock
         self.connection = None
+        self.control_connection = None
+        self.reload_requested = Event()
         self.last_status_key = None
 
     def open(self):
         self.connection = self.connection_factory(self.endpoint, source_system=SYSTEM_ID,
                                                   source_component=COMPONENT_ID)
+        if self.control_endpoint is not None:
+            self.control_connection = self.connection_factory(self.control_endpoint,
+                                                               source_system=SYSTEM_ID,
+                                                               source_component=COMPONENT_ID)
 
     def close(self):
         if self.connection is not None:
             self.connection.close()
+        if self.control_connection is not None:
+            self.control_connection.close()
+
+    def take_reload_request(self):
+        requested = self.reload_requested.is_set()
+        self.reload_requested.clear()
+        return requested
 
     def run(self):
         if self.connection is None:
@@ -50,6 +68,7 @@ class MavlinkAdapter:
         while not self.stop.is_set():
             now_s = self.clock()
             feedback = self._fresh_feedback(now_s)
+            self._poll_control()
             status = self.blackboard.latest_status()
             if now_s >= next_heartbeat:
                 self._send_heartbeat(feedback)
@@ -63,6 +82,28 @@ class MavlinkAdapter:
                 self._send_telemetry(feedback.value)
                 next_telemetry = self._next_deadline(next_telemetry, TELEMETRY_PERIOD_S, now_s)
             self.stop.wait(SCHEDULER_POLL_S)
+
+    def _poll_control(self):
+        if self.control_connection is None:
+            return
+        command = self.control_connection.recv_match(type='COMMAND_LONG', blocking=False)
+        if command is None:
+            return
+        if (command.command != RELOAD_PROFILE_COMMAND
+                or command.target_system not in (0, SYSTEM_ID)
+                or command.target_component not in (0, COMPONENT_ID)
+                or abs(command.param1 - RELOAD_PROFILE_PARAMETER) > 1e-6):
+            self._send_reload_ack(RELOAD_PROFILE_ACK_DENIED, 'unsupported reload command')
+            return
+        self.reload_requested.set()
+
+    def reply_reload(self, accepted, message):
+        self._send_reload_ack(RELOAD_PROFILE_ACK_ACCEPTED if accepted else RELOAD_PROFILE_ACK_DENIED,
+                              message)
+
+    def _send_reload_ack(self, result, message):
+        self.control_connection.mav.command_ack_send(RELOAD_PROFILE_COMMAND, result)
+        self.connection.mav.statustext_send(6, message.encode('utf-8'))
 
     def _fresh_feedback(self, now_s):
         feedback = self.blackboard.latest_feedback()

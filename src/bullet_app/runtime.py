@@ -31,6 +31,8 @@ FEEDBACKS_PER_CONTROL_TICK = 4
 TELEMETRY_POLL_TIMEOUT_MS = 50
 THREAD_JOIN_TIMEOUT_S = 3
 CONFIG_TIMEOUT_S = 3
+MAVLINK_CONTROL_ENDPOINT = "udpin:0.0.0.0:14551"
+RELOADABLE_PHASES = {'READY', 'COMPLETED', 'FAULT'}
 
 
 def format_msp_status_before_arm(status):
@@ -115,11 +117,15 @@ class DetectorRuntime:
 
 
 class MissionRuntime:
-    def __init__(self, transport, config, *, bbox_endpoint, image_topic, hover_check=False, mavlink_endpoint=None):
+    def __init__(self, transport, config, *, bbox_endpoint, image_topic, hover_check=False,
+                 mavlink_endpoint=None, mavlink_control_endpoint=MAVLINK_CONTROL_ENDPOINT,
+                 mission_config=None):
         self.transport, self.config = transport, config
         self.bbox_endpoint, self.image_topic = bbox_endpoint, image_topic
         self.hover_check = hover_check
         self.mavlink_endpoint = mavlink_endpoint
+        self.mavlink_control_endpoint = mavlink_control_endpoint
+        self.mission_config = mission_config
         self.stop = Event()
         self.publisher_stop = Event()
         self.blackboard = RuntimeBlackboard()
@@ -132,7 +138,8 @@ class MissionRuntime:
 
     def start(self):
         if self.mavlink_endpoint is not None:
-            self.mavlink = MavlinkAdapter(self.mavlink_endpoint, self.blackboard, self.stop)
+            self.mavlink = MavlinkAdapter(self.mavlink_endpoint, self.blackboard, self.stop,
+                                          control_endpoint=self.mavlink_control_endpoint)
             self.mavlink.open()
             self.mavlink_thread = Thread(name='bullet-mavlink', target=self._run_mavlink, daemon=True)
             self.mavlink_thread.start()
@@ -210,6 +217,7 @@ class MissionRuntime:
 
     def _control(self):
         mission = Mission(self.config, hover_check=self.hover_check)
+        applied_platform_config = None
         last_command = None
         los_telemetry = LosTelemetryScheduler()
         msp = None
@@ -227,11 +235,29 @@ class MissionRuntime:
                     inputs = self.blackboard.take_control_inputs(FEEDBACKS_PER_CONTROL_TICK)
                     if inputs.config is not None and inputs.config.received_at_s > last_config:
                         mission.configure(inputs.config.value)
+                        applied_platform_config = inputs.config.value
                         if inputs.config.value.get('backend') == 'betaflight' and msp is None:
                             from .msp_flight import MspFlight
                             msp = MspFlight()
                             msp.start()
                         last_config = inputs.config.received_at_s
+                    if self.mavlink is not None and self.mavlink.take_reload_request():
+                        reload_allowed = (mission.phase in RELOADABLE_PHASES
+                                          and mission.feedback is not None
+                                          and mission.feedback.get('state') != 'running')
+                        if not reload_allowed or self.mission_config is None:
+                            self.mavlink.reply_reload(False, 'profile reload requires stopped mission')
+                        else:
+                            try:
+                                new_config = NavigatorConfig.from_yaml(self.mission_config)
+                                new_mission = Mission(new_config, hover_check=self.hover_check)
+                                if applied_platform_config is not None:
+                                    new_mission.configure(applied_platform_config)
+                                mission = new_mission
+                                self.config = new_config
+                                self.mavlink.reply_reload(True, 'mission profile reloaded')
+                            except (OSError, ValueError, TypeError) as error:
+                                self.mavlink.reply_reload(False, f'profile reload failed: {error}')
                     for event in inputs.terminal_events:
                         mission.complete(event.value)
                     for sample in inputs.feedback:
@@ -365,7 +391,9 @@ class MissionRunner:
         config = NavigatorConfig.from_yaml(self.options.mission_config)
         runtime = MissionRuntime(self.transport, config, bbox_endpoint=self.options.bbox_endpoint,
                                  image_topic=self.options.topic, hover_check=self.options.hover_check,
-                                 mavlink_endpoint=self.options.mavlink_endpoint)
+                                 mavlink_endpoint=self.options.mavlink_endpoint,
+                                 mavlink_control_endpoint=self.options.mavlink_control_endpoint,
+                                 mission_config=self.options.mission_config)
         window = 'Bullet app: mission'
         opened = False
         try:

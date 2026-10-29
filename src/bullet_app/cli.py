@@ -8,6 +8,7 @@ import click
 DEFAULT_BBOX_ENDPOINT = "tcp://127.0.0.1:5558"
 DEFAULT_IMAGE_TOPIC = "camera/front/image"
 DEFAULT_MAVLINK_ENDPOINT = "udpout:127.0.0.1:14550"
+DEFAULT_MAVLINK_CONTROL_ENDPOINT = "udpin:0.0.0.0:14551"
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class AppOptions:
     mission_config: Path | None
     hover_check: bool
     mavlink_endpoint: str | None = DEFAULT_MAVLINK_ENDPOINT
+    mavlink_control_endpoint: str | None = DEFAULT_MAVLINK_CONTROL_ENDPOINT
 
 
 @click.command()
@@ -32,11 +34,15 @@ class AppOptions:
 @click.option("--hover-check", is_flag=True, help="Stop after a stable 20-second hover")
 @click.option("--mavlink-endpoint", default=DEFAULT_MAVLINK_ENDPOINT, show_default=True,
               help="Pymavlink output for mission telemetry")
-def command(transport_config, topic, debug, bbox_endpoint, mission_config, hover_check, mavlink_endpoint):
+@click.option("--mavlink-control-endpoint", default=DEFAULT_MAVLINK_CONTROL_ENDPOINT, show_default=True,
+              help="Pymavlink input for stop-only mission profile reload commands")
+def command(transport_config, topic, debug, bbox_endpoint, mission_config, hover_check, mavlink_endpoint,
+            mavlink_control_endpoint):
     """Receive Bullet camera images, detect red targets, and publish bounding boxes."""
     if hover_check and mission_config is None:
         raise click.UsageError("--hover-check requires --mission-config")
-    return AppOptions(transport_config, topic, debug, bbox_endpoint, mission_config, hover_check, mavlink_endpoint)
+    return AppOptions(transport_config, topic, debug, bbox_endpoint, mission_config, hover_check,
+                      mavlink_endpoint, mavlink_control_endpoint)
 
 
 class CliParser:

@@ -100,6 +100,15 @@ def test_heavy_quad_profiles_use_aggressive_takeoff_controller(profile):
     assert config.tuning.takeoff_vertical_slew_m_s2 == pytest.approx(8.0)
 
 
+@pytest.mark.parametrize('profile', ['config/bullet_profile_heavy_quad.yaml', 'config/betaflight_los_heavy_quad.yaml'])
+def test_heavy_quad_profiles_use_aggressive_lateral_tracking(profile):
+    config = NavigatorConfig.from_yaml(ROOT / profile)
+    assert config.tuning.approach_pitch_rad == pytest.approx(radians(8.0))
+    assert config.tuning.roll_slew_rad_s == pytest.approx(radians(60.0))
+    assert config.tuning.azimuth_kp == pytest.approx(2.2)
+    assert config.tuning.azimuth_kd_s == pytest.approx(2.0)
+
+
 def test_betaflight_stopped_readiness_uses_true_rc_minimum():
     config = betaflight_config()
     m = Mission(config, app_id='app')

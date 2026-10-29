@@ -15,6 +15,7 @@ class Mav:
         self.attitudes = []
         self.altitudes = []
         self.statuses = []
+        self.acks = []
 
     def heartbeat_send(self, *args):
         self.heartbeats.append(args)
@@ -28,11 +29,18 @@ class Mav:
     def statustext_send(self, *args):
         self.statuses.append(args)
 
+    def command_ack_send(self, *args):
+        self.acks.append(args)
+
 
 class Connection:
-    def __init__(self):
+    def __init__(self, messages=()):
         self.mav = Mav()
         self.closed = False
+        self.messages = list(messages)
+
+    def recv_match(self, **kwargs):
+        return self.messages.pop(0) if self.messages else None
 
     def close(self):
         self.closed = True
@@ -96,6 +104,23 @@ def test_adapter_sends_indexed_status_with_fault_severity():
     severity, text = connection.mav.statuses[0]
     assert severity == 3
     assert text.startswith(b'[')
+
+
+def test_adapter_queues_valid_profile_reload_command():
+    class Command:
+        command = 31010
+        target_system = 1
+        target_component = 1
+        param1 = 1.0
+    board = RuntimeBlackboard()
+    telemetry = Connection()
+    control = Connection([Command()])
+    publisher = MavlinkAdapter('telemetry', board, Event(), control_endpoint='control',
+                               connection_factory=lambda endpoint, **kwargs: telemetry if endpoint == 'telemetry' else control)
+    publisher.open()
+    publisher._poll_control()
+    assert publisher.take_reload_request()
+    assert control.mav.acks == []
 
 
 def test_mavlink_attitude_converts_flu_z_up_to_frd_ned():
