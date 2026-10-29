@@ -12,3 +12,4 @@
 | [0008 MAVLink Telemetry Adapter](0008-mavlink-telemetry-adapter.md) | Publish isolated MAVLink heartbeat, attitude, and altitude from mission feedback. | Implemented | `76aa876` |
 | [0009 Configurable yaw search timeout](0009-configurable-yaw-search-timeout.md) | Expose and extend the yaw-search deadline through navigator tuning. | Implemented | `6ace504`, `93cb08d`, `f3d0d74` |
 | [0010 Heavy quad mission profiles](0010-heavy-quad-mission-profiles.md) | Align mission vehicle limits with the selected heavy_quad physics profile. | Implemented | `32adb71` (`ecf9300` workspace profiles) |
+| [0011 Vertical LOS centering](0011-vertical-los-centering.md) | Keep the target on the image Y centerline and brake excessive descent with thrust. | Implemented; commit pending | Pending |
