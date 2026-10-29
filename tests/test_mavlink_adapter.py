@@ -14,6 +14,7 @@ class Mav:
         self.heartbeats = []
         self.attitudes = []
         self.altitudes = []
+        self.statuses = []
 
     def heartbeat_send(self, *args):
         self.heartbeats.append(args)
@@ -23,6 +24,9 @@ class Mav:
 
     def altitude_send(self, *args):
         self.altitudes.append(args)
+
+    def statustext_send(self, *args):
+        self.statuses.append(args)
 
 
 class Connection:
@@ -81,6 +85,17 @@ def test_adapter_omits_stale_feedback_and_missing_altitude():
     assert len(connection.mav.attitudes) == 1
     assert connection.mav.altitudes == []
     assert publisher._fresh_feedback(10. + FEEDBACK_STALE_S + .001) is None
+
+
+def test_adapter_sends_indexed_status_with_fault_severity():
+    board = RuntimeBlackboard()
+    publisher, connection = adapter(board)
+    status = {'phase': 'FAULT', 'reason': 'search_timeout', 'diagnostics': {}}
+    publisher._send_status(status)
+    assert connection.mav.statuses
+    severity, text = connection.mav.statuses[0]
+    assert severity == 3
+    assert text.startswith(b'[')
 
 
 def test_mavlink_attitude_converts_flu_z_up_to_frd_ned():

@@ -3,6 +3,9 @@ import time
 
 from los_tracking.geometry import euler
 from pymavlink import mavutil
+from bullet_msgs.status_messages import (MAV_SEVERITY_ERROR, STATUS_MESSAGE_BY_KEY,
+                                         status_text_chunks)
+from .status import format_status, status_key
 
 
 HEARTBEAT_PERIOD_S = 1.
@@ -30,6 +33,7 @@ class MavlinkAdapter:
         self.connection_factory = connection_factory
         self.clock = clock
         self.connection = None
+        self.last_status_key = None
 
     def open(self):
         self.connection = self.connection_factory(self.endpoint, source_system=SYSTEM_ID,
@@ -46,9 +50,15 @@ class MavlinkAdapter:
         while not self.stop.is_set():
             now_s = self.clock()
             feedback = self._fresh_feedback(now_s)
+            status = self.blackboard.latest_status()
             if now_s >= next_heartbeat:
                 self._send_heartbeat(feedback)
                 next_heartbeat = self._next_deadline(next_heartbeat, HEARTBEAT_PERIOD_S, now_s)
+            if status is not None:
+                current_status_key = status_key(status.value)
+                if current_status_key != self.last_status_key:
+                    self._send_status(status.value)
+                    self.last_status_key = current_status_key
             if feedback is not None and now_s >= next_telemetry:
                 self._send_telemetry(feedback.value)
                 next_telemetry = self._next_deadline(next_telemetry, TELEMETRY_PERIOD_S, now_s)
@@ -80,6 +90,15 @@ class MavlinkAdapter:
         if altitude is not None:
             self.connection.mav.altitude_send(time_us, UNKNOWN_FLOAT, UNKNOWN_FLOAT, altitude,
                                               UNKNOWN_FLOAT, UNKNOWN_FLOAT, UNKNOWN_FLOAT)
+
+    def _send_status(self, status):
+        reason = status.get('reason', '')
+        key = reason if reason in STATUS_MESSAGE_BY_KEY else status.get('phase', '').lower()
+        definition = STATUS_MESSAGE_BY_KEY.get(key, STATUS_MESSAGE_BY_KEY['fault'])
+        severity = MAV_SEVERITY_ERROR if status.get('phase') == 'FAULT' else definition.severity
+        text = f"{status.get('phase', 'UNKNOWN')}: {format_status(status)}"
+        for chunk in status_text_chunks(definition.index, text):
+            self.connection.mav.statustext_send(severity, chunk.encode('utf-8'))
 
     @staticmethod
     def _next_deadline(deadline, period_s, now_s):
