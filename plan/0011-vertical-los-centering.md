@@ -32,8 +32,8 @@ association limits, thrust limits, and recovery behavior remain in place.
 
 ## Status
 
-Implemented; commit pending.
+Implemented; 114 LOS tests and 33 focused app tests passed.
 
 ## Implementation commit
 
-Pending
+`7a76c43` (`los_tracking`), `acb0b5d` (workspace profiles)
