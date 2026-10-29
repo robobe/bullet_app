@@ -8,7 +8,7 @@ import zmq
 from bullet_msgs.shm import FrameWriter, topic_prefix
 
 from bullet_app.receiver import ImageReceiver
-from bullet_app.detector import detect_red_box
+from bullet_perception import detect_bbox
 
 
 TOPIC = "camera/front/image"
@@ -80,7 +80,7 @@ def test_exact_topic_over_tcp():
             time.sleep(0.005)
         publisher.send(writer.write(TOPIC, pixels))
         _, image = receive(receiver)
-        assert detect_red_box(image) == (0, 0, 8, 8)
+        assert detect_bbox(image) == (0, 0, 8, 8)
 
 
 def test_duplicate_overwritten_missing_and_busy_frames():

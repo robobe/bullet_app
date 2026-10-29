@@ -15,6 +15,7 @@ class Mav:
         self.attitudes = []
         self.altitudes = []
         self.statuses = []
+        self.named_values = []
         self.acks = []
 
     def heartbeat_send(self, *args):
@@ -28,6 +29,9 @@ class Mav:
 
     def statustext_send(self, *args):
         self.statuses.append(args)
+
+    def named_value_float_send(self, *args):
+        self.named_values.append(args)
 
     def command_ack_send(self, *args):
         self.acks.append(args)
@@ -93,6 +97,27 @@ def test_adapter_omits_stale_feedback_and_missing_altitude():
     assert len(connection.mav.attitudes) == 1
     assert connection.mav.altitudes == []
     assert publisher._fresh_feedback(10. + FEEDBACK_STALE_S + .001) is None
+
+
+def test_adapter_publishes_latest_bbox_as_named_values():
+    board = RuntimeBlackboard()
+    board.write_vision(({}, (10, 20, 30, 40)), ({}, (10, 20, 30, 40)), 10.)
+    publisher, connection = adapter(board)
+
+    publisher._send_bbox(10.)
+
+    values = {name.decode(): value for _, name, value in connection.mav.named_values}
+    assert values == {'BBOX_VALID': 1., 'BBOX_X': 10., 'BBOX_Y': 20., 'BBOX_W': 30., 'BBOX_H': 40.}
+
+
+def test_adapter_marks_missing_bbox_invalid():
+    publisher, connection = adapter(RuntimeBlackboard())
+
+    publisher._send_bbox(10.)
+
+    values = {name.decode(): value for _, name, value in connection.mav.named_values}
+    assert values['BBOX_VALID'] == 0.
+    assert all(isnan(values[name]) for name in ('BBOX_X', 'BBOX_Y', 'BBOX_W', 'BBOX_H'))
 
 
 def test_adapter_sends_indexed_status_with_fault_severity():

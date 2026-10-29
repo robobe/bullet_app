@@ -22,12 +22,12 @@ uv run --locked --all-packages --all-extras --all-groups python examples/live_lo
 The Bullet workspace includes **Bullet: App (debug)**. **Bullet: Physics + render
 + app** and **Bullet: Run all** launch it with Godot, physics, and the MCAP
 logger. Click Start in Godot to produce images and start episode recording.
-The debug application provides the camera and bounding-box preview.
+Use Bullet View in Local mode for the camera and bounding-box preview.
 
 The receiver moved here from `los_tracking`; it uses `bullet_msgs.FrameReader`
 for exact topic matching, SHM validation, private BGR copies, duplicate/stale
-skips, row padding, and publisher restarts. The red detector now lives in
-`bullet_app.detector`; its image-to-bbox behavior is unchanged. `los_tracking`
+skips, row padding, and publisher restarts. The reusable image detector now lives in
+the `bullet_perception` workspace package; its image-to-bbox behavior is unchanged. `los_tracking`
 now owns the separate bbox/barometer/attitude-to-RC library. This live app still
 runs detection and recording only; sensor reception and flight-command transport
 are deferred. See the [navigator calling contract](../los_tracking/README.md).
@@ -62,10 +62,10 @@ RawImage messages do not preserve that identity, so exact MCAP image association
 is not guaranteed.
 
 No new frame means no new result. The app waits for the renderer and resumes on
-restart. Debug mode shows yellow boxes and Waiting/Live/Stale status (stale after
-one second without a new image). A no-target frame clears the box. Q, Esc,
-window close, or Ctrl+C releases sockets and mappings. Normal mode opens no
-window. Malformed input or bind failures exit with a diagnostic and nonzero code.
+restart. `--debug` enables detector diagnostics; camera rendering is owned by
+Bullet View. A no-target frame clears the bbox. Ctrl+C releases sockets and
+mappings. Malformed input or bind failures exit with a diagnostic and nonzero
+code.
 
 Publication uses nonblocking PUB/SUB with a 64-message send high-water mark.
 Disconnected/slow subscribers and subscription startup can lose results; there
@@ -85,11 +85,12 @@ image-to-detection-to-MCAP round trip using synthetic images.
 
 ## Red detector ownership
 
-`from bullet_app.detector import detect_red_box` accepts a nonempty H×W×3 uint8
+`from bullet_perception import detect_bbox` accepts a nonempty H×W×3 uint8
 BGR array and returns `(x, y, width, height)` or `None`, preserving the input.
-It selects the largest red contour using HSV hue 0–10 or 170–180, saturation
->=100, value >=80, 3×3 opening, contour area >=4 and width/height >=3 pixels.
-This replaces the former `los_tracking.detect_red_box` import.
+The package selects the largest red contour using HSV hue 0–10 or 170–180,
+saturation >=100, value >=80, 3×3 opening, contour area >=4 and width/height
+>=3 pixels. `bullet_app` consumes this generic detector without owning the
+perception implementation.
 
 ## App-owned flight mission
 

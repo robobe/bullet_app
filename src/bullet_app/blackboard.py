@@ -169,6 +169,10 @@ class RuntimeBlackboard:
         with self._lock:
             return self._status
 
+    def latest_vision(self):
+        with self._lock:
+            return self._vision
+
     def take_publication_inputs(self):
         with self._lock:
             queue_depths = {name: len(queue) for name, queue in self._output_events.items()}

@@ -18,6 +18,7 @@ SCHEDULER_POLL_S = .01
 SYSTEM_ID = 1
 COMPONENT_ID = mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
 UNKNOWN_FLOAT = float('nan')
+BBOX_NAMED_VALUES = ('BBOX_VALID', 'BBOX_X', 'BBOX_Y', 'BBOX_W', 'BBOX_H')
 
 
 def mavlink_attitude(orientation_xyzw):
@@ -78,8 +79,10 @@ class MavlinkAdapter:
                 if current_status_key != self.last_status_key:
                     self._send_status(status.value)
                     self.last_status_key = current_status_key
-            if feedback is not None and now_s >= next_telemetry:
-                self._send_telemetry(feedback.value)
+            if now_s >= next_telemetry:
+                if feedback is not None:
+                    self._send_telemetry(feedback.value)
+                self._send_bbox(now_s)
                 next_telemetry = self._next_deadline(next_telemetry, TELEMETRY_PERIOD_S, now_s)
             self.stop.wait(SCHEDULER_POLL_S)
 
@@ -131,6 +134,20 @@ class MavlinkAdapter:
         if altitude is not None:
             self.connection.mav.altitude_send(time_us, UNKNOWN_FLOAT, UNKNOWN_FLOAT, altitude,
                                               UNKNOWN_FLOAT, UNKNOWN_FLOAT, UNKNOWN_FLOAT)
+
+    def _send_bbox(self, now_s):
+        vision = self.blackboard.latest_vision()
+        bbox = None if vision is None else vision.value[1]
+        values = {
+            'BBOX_VALID': 1. if bbox is not None else 0.,
+            'BBOX_X': UNKNOWN_FLOAT if bbox is None else float(bbox[0]),
+            'BBOX_Y': UNKNOWN_FLOAT if bbox is None else float(bbox[1]),
+            'BBOX_W': UNKNOWN_FLOAT if bbox is None else float(bbox[2]),
+            'BBOX_H': UNKNOWN_FLOAT if bbox is None else float(bbox[3]),
+        }
+        timestamp_ms = int(now_s * 1000) % 2**32
+        for name in BBOX_NAMED_VALUES:
+            self.connection.mav.named_value_float_send(timestamp_ms, name.encode('ascii'), values[name])
 
     def _send_status(self, status):
         reason = status.get('reason', '')

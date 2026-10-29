@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Main Bullet application: live camera to red-target bounding boxes"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["msp-link", "bullet-msgs", "los-tracking", "click>=8.5,<9", "loguru>=0.7,<1", "numpy>=2,<3", "opencv-python>=4.10,<5", "pyzmq>=27,<28", "jsonschema>=4,<5", "pymavlink>=2.4,<3"]
+dependencies = ["msp-link", "bullet-msgs", "los-tracking", "bullet-perception", "click>=8.5,<9", "loguru>=0.7,<1", "numpy>=2,<3", "opencv-python>=4.10,<5", "pyzmq>=27,<28", "jsonschema>=4,<5", "pymavlink>=2.4,<3"]
 
 [project.scripts]
 bullet-app = "bullet_app.main:main"
@@ -20,6 +20,7 @@ dev = ["pytest>=9,<10", "mcap-bagger"]
 msp-link = { workspace = true }
 bullet-msgs = { workspace = true }
 los-tracking = { workspace = true }
+bullet-perception = { workspace = true }
 mcap-bagger = { workspace = true }
 
 [tool.pytest.ini_options]

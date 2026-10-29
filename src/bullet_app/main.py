@@ -2,13 +2,11 @@
 import sys
 
 import click
-import cv2
 from loguru import logger
 import zmq
 
 from .application import Application
 from .cli import CliParser
-from .ui import draw_debug
 
 
 def configure_logging():
@@ -27,7 +25,7 @@ def main(argv=None):
         return error.exit_code
     except KeyboardInterrupt:
         return 0
-    except (OSError, ValueError, zmq.ZMQError, cv2.error) as error:
+    except (OSError, ValueError, zmq.ZMQError) as error:
         logger.error("Bullet app failed: {}", error)
         return 1
 

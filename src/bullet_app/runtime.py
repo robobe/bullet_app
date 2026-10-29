@@ -1,21 +1,18 @@
-"""Dedicated runtime workers; OpenCV UI stays on the main thread."""
+"""Dedicated runtime workers; Bullet View owns camera visualization."""
 from dataclasses import asdict
-import os
 from pathlib import Path
 from bullet_msgs.provenance import revisions
 from threading import Event, Thread
 import time
 
-import cv2
+from bullet_perception import detect_bbox
 from loguru import logger
-import numpy as np
 import zmq
 from bullet_msgs.flight import (CONFIG_TOPIC, FEEDBACK_TOPIC, MAX_FLIGHT_BYTES,
                                decode, validate_config, validate_feedback)
 from bullet_msgs.control import STATE_TOPIC, validate_state
 from bullet_msgs.scenario import END_TOPIC, validate_end
 from los_tracking import NavigatorConfig
-from .detector import detect_red_box
 from .blackboard import RuntimeBlackboard
 from .mission import Mission, COMMAND_PERIOD_S
 from .los_telemetry import LosTelemetryScheduler
@@ -23,7 +20,6 @@ from .mavlink_adapter import MavlinkAdapter
 from .publisher import BboxPublisher
 from .receiver import ImageReceiver
 from .runtime_publisher import RuntimePublisher
-from .ui import draw_debug
 
 
 FEEDBACK_HWM = 64
@@ -68,18 +64,12 @@ class DetectorRuntime:
 
     def run(self):
         receiver = publisher = None
-        window_open = False
-        window = f"Bullet app: {self.options.topic} ({os.getpid()})"
         try:
             publisher = BboxPublisher(self.options.bbox_endpoint)
             receiver = ImageReceiver(self.transport["image_endpoint"], self.options.topic)
-            image = np.zeros((480, 640, 3), dtype=np.uint8)
             bbox = last_frame = None
             last_report = time.monotonic()
             sequence = 0
-            if self.options.debug:
-                cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-                window_open = True
             logger.info("Subscribed to {} on {}, SHM pixels", self.options.topic, self.transport["image_endpoint"])
             logger.info("Publishing tracking/front/bbox on {}", self.options.bbox_endpoint)
             while True:
@@ -87,7 +77,7 @@ class DetectorRuntime:
                 now = time.monotonic()
                 if result is not None:
                     metadata, image = result
-                    bbox = detect_red_box(image)
+                    bbox = detect_bbox(image)
                     publisher.publish(metadata, bbox, self.options.topic)
                     sequence = metadata["sequence"]
                     last_frame = now
@@ -96,13 +86,7 @@ class DetectorRuntime:
                 if now - last_report >= 1:
                     logger.info(text)
                     last_report = now
-                if self.options.debug:
-                    cv2.imshow(window, draw_debug(image, bbox, status))
-                    if cv2.waitKey(10) & 0xff in (ord("q"), 27):
-                        break
-                    if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
-                        break
-                elif result is None:
+                if result is None:
                     time.sleep(0.01)
         except KeyboardInterrupt:
             pass
@@ -111,8 +95,6 @@ class DetectorRuntime:
                 receiver.close()
             if publisher is not None:
                 publisher.close()
-            if window_open:
-                cv2.destroyAllWindows()
         return 0
 
 
@@ -208,7 +190,7 @@ class MissionRuntime:
                     self.stop.wait(0.002)
                     continue
                 metadata, image = result
-                bbox = detect_red_box(image)
+                bbox = detect_bbox(image)
                 metadata = dict(metadata, processing_completed_us=time.monotonic_ns() // 1000)
                 self.blackboard.write_vision((metadata, bbox), (image, bbox), time.monotonic())
                 self.blackboard.enqueue_bbox((metadata, bbox, self.image_topic), time.monotonic())
@@ -394,36 +376,21 @@ class MissionRunner:
                                  mavlink_endpoint=self.options.mavlink_endpoint,
                                  mavlink_control_endpoint=self.options.mavlink_control_endpoint,
                                  mission_config=self.options.mission_config)
-        window = 'Bullet app: mission'
-        opened = False
         try:
             runtime.start()
-            if self.options.debug:
-                cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-                opened = True
             from .status import format_status, status_key
             previous_status = None
             while not runtime.stop.is_set():
-                display, status = runtime.blackboard.display_status()
-                display = None if display is None else display.value
+                status = runtime.blackboard.latest_status()
                 status = None if status is None else status.value
                 if status is not None and status_key(status) != previous_status:
                     previous_status = status_key(status)
                     logger.info("Mission {}: {}", status['phase'], format_status(status))
-                if self.options.debug:
-                    if display is not None:
-                        text = f"{status['phase']}: {format_status(status)}" if status else 'Waiting'
-                        cv2.imshow(window, draw_debug(*display, text))
-                    if cv2.waitKey(10) & 0xff in (ord('q'), 27) or cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
-                        break
-                else:
-                    runtime.stop.wait(0.05)
+                runtime.stop.wait(0.05)
         except KeyboardInterrupt:
             pass
         finally:
             runtime.close()
-            if opened:
-                cv2.destroyAllWindows()
         if runtime.error:
             logger.error("Bullet mission failed: {}", runtime.error)
             return 1

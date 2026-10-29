@@ -6,15 +6,6 @@ import bullet_app.application as application
 import bullet_app.runtime as runtime
 
 
-def test_debug_drawing_preserves_input_and_clears_bbox():
-    image = np.zeros((80, 100, 3), dtype=np.uint8)
-    display = live_los.draw_debug(image, (30, 40, 20, 20), "Live")
-    assert display[40, 30].tolist() == [0, 255, 255]
-    assert not image.any()
-    cleared = live_los.draw_debug(image, None, "Live")
-    assert not cleared[35:].any()
-
-
 @pytest.mark.parametrize("debug", [False, True])
 def test_example_processes_frames_and_cleans_up(monkeypatch, debug):
     image = np.zeros((80, 100, 3), dtype=np.uint8)
@@ -54,32 +45,10 @@ def test_example_processes_frames_and_cleans_up(monkeypatch, debug):
     monkeypatch.setattr(runtime, "ImageReceiver", Receiver)
     monkeypatch.setattr(application, "load_transport", lambda path: {"image_endpoint": "tcp://127.0.0.1:5556"})
     monkeypatch.setattr(runtime.time, "sleep", lambda seconds: None)
-    calls = []
-
-    def gui(name, result=None):
-        def call(*args):
-            assert debug, f"unexpected GUI call: {name}"
-            calls.append(name)
-            if name == "imshow":
-                calls.append(args[1].copy())
-            return result
-        return call
-
-    for name, result in [("namedWindow", None), ("imshow", None), ("waitKey", -1),
-                         ("getWindowProperty", 1), ("destroyAllWindows", None)]:
-        monkeypatch.setattr(runtime.cv2, name, gui(name, result))
     args = ["--transport-config", "unused.json"] + (["--debug"] if debug else [])
     assert live_los.main(args) == 0
     assert Receiver.closed and Publisher.closed
     assert Publisher.results == [(30, 40, 20, 20), None]
-    if debug:
-        displays = [item for item in calls if isinstance(item, np.ndarray)]
-        assert len(displays) == 3
-        assert displays[1][40, 30].tolist() == [0, 255, 255]
-        assert not displays[2][35:].any()
-        assert calls[-1] == "destroyAllWindows"
-    else:
-        assert calls == []
 
 
 def test_example_reports_transport_error(monkeypatch, capsys):

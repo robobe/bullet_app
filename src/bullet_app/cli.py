@@ -26,7 +26,7 @@ class AppOptions:
 @click.command()
 @click.option("--transport-config", type=click.Path(path_type=Path), required=True)
 @click.option("--topic", default=DEFAULT_IMAGE_TOPIC, show_default=True)
-@click.option("--debug", is_flag=True, help="Show camera frames and target bounding box")
+@click.option("--debug", is_flag=True, help="Enable detector diagnostics; view frames in Bullet View")
 @click.option("--bbox-endpoint", default=DEFAULT_BBOX_ENDPOINT, show_default=True,
               help="Loopback TCP endpoint to bind for bbox results")
 @click.option("--mission-config", type=click.Path(path_type=Path),
