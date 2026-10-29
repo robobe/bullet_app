@@ -71,6 +71,26 @@ def test_profile_mismatch_refuses_readiness():
         m.configure(config)
 
 
+@pytest.mark.parametrize(('profile', 'backend'), [
+    ('config/bullet_profile_heavy_quad.yaml', 'internal'),
+    ('config/betaflight_los_heavy_quad.yaml', 'betaflight'),
+])
+def test_heavy_quad_profiles_match_selected_platform(profile, backend):
+    config = NavigatorConfig.from_yaml(ROOT / profile)
+    assert config.vehicle.mass_kg == 5.0
+    assert config.vehicle.max_thrust_n == pytest.approx(122.625)
+    packet = platform(config)
+    if backend == 'betaflight':
+        packet.update(schema_version=2, backend=backend, attitude_model='imu_complementary')
+    Mission(config, app_id='app').configure(packet)
+
+
+def test_heavy_quad_betaflight_profile_has_heavy_vehicle_spool_calibration():
+    config = NavigatorConfig.from_yaml(ROOT / 'config/betaflight_los_heavy_quad.yaml')
+    assert config.tuning.betaflight_hover_pwm == 1640
+    assert config.tuning.betaflight_takeoff_pwm == 1750
+
+
 def test_betaflight_stopped_readiness_uses_true_rc_minimum():
     config = betaflight_config()
     m = Mission(config, app_id='app')
