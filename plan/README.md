@@ -16,3 +16,4 @@
 | [0012 Aggressive X-axis tracking tuning](0012-aggressive-x-axis-tuning.md) | Increase heavy-quad lateral tracking authority after roll saturation in the latest flight. | Pending | Pending |
 | [0013 Dedicated aggressive takeoff controller](0013-dedicated-takeoff-controller.md) | Use an application-owned vertical PID for a 4 m/s heavy-quad takeoff. | Implemented; tests passed | `89049df`, `4fe4147`, `84a11d0` |
 | [0014 Stop-only mission profile reload](0014-stop-only-profile-reload.md) | Reload the mission YAML from Bullet View while the scenario is stopped. | Pending | Pending |
+| [0015 Wind-robust optical LOS recovery](0015-optical-recovery-wind-braking.md) | Preserve bounded optical roll and vertical corrections during visual recovery under wind. | Implemented; tests passed | `abc7814` (`los_tracking`) |
