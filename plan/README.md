@@ -18,4 +18,4 @@
 | [0014 Stop-only mission profile reload](0014-stop-only-profile-reload.md) | Reload the mission YAML from Bullet View while the scenario is stopped. | Pending | Pending |
 | [0015 Wind-robust optical LOS recovery](0015-optical-recovery-wind-braking.md) | Preserve bounded optical roll and vertical corrections during visual recovery under wind. | Implemented; tests passed | `abc7814` (`los_tracking`) |
 | [0016 Bullet Perception Library](0016-bullet-perception-library.md) | Extract ndarray-to-bounding-box detection into a reusable workspace package. | Pending | Pending |
-| [0017 Yaw overshoot tuning](0017-yaw-overshoot-tuning.md) | Reduce heavy-quad Betaflight first-approach yaw overshoot through a lower proportional gain. | Implemented | `d12262f` |
+| [0017 Yaw overshoot tuning](0017-yaw-overshoot-tuning.md) | Reduce heavy-quad Betaflight first-approach yaw overshoot through a lower proportional gain. | Implemented | `3db6fbf` |
