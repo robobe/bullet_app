@@ -14,4 +14,4 @@
 | [0010 Heavy quad mission profiles](0010-heavy-quad-mission-profiles.md) | Align mission vehicle limits with the selected heavy_quad physics profile. | Implemented | `32adb71` (`ecf9300` workspace profiles) |
 | [0011 Vertical LOS centering](0011-vertical-los-centering.md) | Keep the target on the image Y centerline and brake excessive descent with thrust. | Implemented; tests passed | `7a76c43`, `acb0b5d` |
 | [0012 Aggressive X-axis tracking tuning](0012-aggressive-x-axis-tuning.md) | Increase heavy-quad lateral tracking authority after roll saturation in the latest flight. | Pending | Pending |
-| [0013 Dedicated aggressive takeoff controller](0013-dedicated-takeoff-controller.md) | Use an application-owned vertical PID for a 4 m/s heavy-quad takeoff. | Pending | Pending |
+| [0013 Dedicated aggressive takeoff controller](0013-dedicated-takeoff-controller.md) | Use an application-owned vertical PID for a 4 m/s heavy-quad takeoff. | Implemented; tests passed | `89049df`, `4fe4147`, `84a11d0` |

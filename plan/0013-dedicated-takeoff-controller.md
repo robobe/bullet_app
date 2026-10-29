@@ -35,8 +35,8 @@ climb, and 8 m/s² reference slew. Racer profiles retain the existing default.
 
 ## Status
 
-Pending
+Implemented; tests passed
 
 ## Implementation commit
 
-Pending
+`89049df` (bullet_app), `4fe4147` (los_tracking), `84a11d0` (workspace profiles)
