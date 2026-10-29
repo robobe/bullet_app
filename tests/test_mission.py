@@ -91,6 +91,15 @@ def test_heavy_quad_betaflight_profile_has_heavy_vehicle_spool_calibration():
     assert config.tuning.betaflight_takeoff_pwm == 1750
 
 
+@pytest.mark.parametrize('profile', ['config/bullet_profile_heavy_quad.yaml', 'config/betaflight_los_heavy_quad.yaml'])
+def test_heavy_quad_profiles_use_aggressive_takeoff_controller(profile):
+    config = NavigatorConfig.from_yaml(ROOT / profile)
+    assert config.tuning.takeoff_kp_s_inv == pytest.approx(1.5)
+    assert config.tuning.takeoff_ki_s2_inv == pytest.approx(0.25)
+    assert config.tuning.takeoff_max_climb_m_s == pytest.approx(4.0)
+    assert config.tuning.takeoff_vertical_slew_m_s2 == pytest.approx(8.0)
+
+
 def test_betaflight_stopped_readiness_uses_true_rc_minimum():
     config = betaflight_config()
     m = Mission(config, app_id='app')

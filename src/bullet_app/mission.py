@@ -12,6 +12,7 @@ from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample
                           LosNavigator, NavigationInput, ControlDemand, State, TargetObservation)
 from los_tracking.geometry import euler, wrap, world_bearing, box_edges
 from .rc import calibrate_betaflight_hover, encode_demand, ANGLE_SCALE_RAD, YAW_RATE_SCALE_RAD_S
+from .controller import TakeoffController
 from .search import (YawSearch, SEARCH_RATE_RAD_S, YAW_SETTLE_DURATION_S,
                      YAW_SETTLE_RATE_RAD_S, TARGET_CENTER_TOLERANCE_PX, centering_command, ANGLE_EPSILON_RAD)
 
@@ -60,6 +61,11 @@ class Mission:
         self.diagnostics = {}
         self.terminal_result = None
         self.hold = AltitudeHeadingHold(self.config)
+        self.takeoff_controller = TakeoffController(self.config.tuning.takeoff_kp_s_inv,
+                                                     self.config.tuning.takeoff_ki_s2_inv,
+                                                     self.config.tuning.takeoff_max_climb_m_s,
+                                                     self.config.tuning.takeoff_vertical_slew_m_s2)
+        self.takeoff_active = False
         self.navigator = LosNavigator(self.config)
         self.datum = self.goal = None
         self.takeoff_height_m = TAKEOFF_HEIGHT_M
@@ -373,11 +379,26 @@ class Mission:
             elif self.phase == 'FAULT':
                 yaw_reference = None
 
+        takeoff_output = None
+        if self.phase in ('TAKEOFF_SPOOL', 'TAKEOFF'):
+            if not self.takeoff_active:
+                self.takeoff_controller.reset()
+            self.takeoff_active = True
+            takeoff_output = self.takeoff_controller.update(
+                now_s=now_s, target_altitude_m=self.goal, altitude_m=altitude)
+        else:
+            self.takeoff_active = False
         command = self.hold.command(now_s=now_s, target_altitude_m=self.goal,
-                                   yaw_rate_rad_s=yaw_reference)
+                                   yaw_rate_rad_s=yaw_reference,
+                                   vertical_reference_m_s=None if takeoff_output is None else takeoff_output.reference_m_s)
         self.diagnostics = {**self.hold.control.last_diagnostics, **vision,
                             'settling_vertical_speed_m_s': settling_vz,
                             'settling_window_s': settling_window}
+        if takeoff_output is not None:
+            self.diagnostics.update(takeoff_reference_m_s=takeoff_output.reference_m_s,
+                                    takeoff_altitude_error_m=takeoff_output.altitude_error_m,
+                                    takeoff_integral_m_s=takeoff_output.integral_m_s,
+                                    takeoff_saturated=takeoff_output.saturated)
         if self.search.started_sim is not None:
             self.diagnostics.update(self.search.diagnostics(sim, rotating=self.phase == 'YAW_SEARCH',
                                                             commanded_yaw_rate_rad_s=yaw_reference or 0.))
