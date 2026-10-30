@@ -12,8 +12,8 @@ class Application:
 
     def run(self) -> int:
         transport = load_transport(self.options.transport_config)
-        if self.options.bbox_endpoint in transport.values():
-            raise ValueError("bbox endpoint must differ from transport endpoints")
+        if self.options.bbox_endpoint in transport.values() or self.options.visual_endpoint in transport.values():
+            raise ValueError("visual and bbox endpoints must differ from transport endpoints")
         if self.options.mission_config is not None:
             return MissionRunner(self.options, transport).run()
         return DetectorRuntime(self.options, transport).run()

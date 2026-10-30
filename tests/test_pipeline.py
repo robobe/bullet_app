@@ -19,7 +19,7 @@ from bullet_app.publisher import BBOX_TOPIC, BboxPublisher
 
 
 def free_endpoints():
-    sockets = [socket.socket() for _ in range(4)]
+    sockets = [socket.socket() for _ in range(5)]
     try:
         for item in sockets:
             item.bind(("127.0.0.1", 0))
@@ -30,9 +30,13 @@ def free_endpoints():
 
 
 def test_real_image_detection_and_no_target_recorded_to_mcap(tmp_path):
-    telemetry, images, control, bbox_endpoint = free_endpoints()
+    telemetry, images, control, visual_endpoint, bbox_endpoint = free_endpoints()
     profile = tmp_path / "transport.json"
     profile.write_text(json.dumps(dict(telemetry_endpoint=telemetry, image_endpoint=images, control_endpoint=control)))
+    visual_config = tmp_path / "visual.yaml"
+    visual_config.write_text(yaml.safe_dump(dict(
+        source=dict(type="zmq_shm", endpoint=images, topic="camera/front/image"),
+        output=dict(endpoint=visual_endpoint, image_topic="camera/front/image"))))
     config_path = tmp_path / "recorder.yaml"
     config_path.write_text(yaml.safe_dump(dict(project="test", output_dir="recordings",
         transport_config="transport.json", topics=[dict(key=BBOX_TOPIC, input="json",
@@ -47,13 +51,16 @@ def test_real_image_detection_and_no_target_recorded_to_mcap(tmp_path):
 
     recording.receive = receive
     recording.start()
-    process = None
+    visual_process = process = None
     try:
         with zmq.Context() as context, context.socket(zmq.XPUB) as publisher, FrameWriter(20, 16) as writer:
             publisher.setsockopt(zmq.LINGER, 0)
             publisher.bind(images)
+            visual_process = subprocess.Popen([sys.executable, "-m", "bullet_visual.main",
+                "--config", str(visual_config)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             process = subprocess.Popen([sys.executable, "-m", "bullet_app.main",
-                "--transport-config", str(profile), "--bbox-endpoint", bbox_endpoint],
+                "--transport-config", str(profile), "--visual-endpoint", visual_endpoint,
+                "--bbox-endpoint", bbox_endpoint],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             assert publisher.poll(5000), "app did not subscribe"
             assert publisher.recv() == b"\x01" + topic_prefix("camera/front/image")
@@ -66,19 +73,25 @@ def test_real_image_detection_and_no_target_recorded_to_mcap(tmp_path):
                 deadline = time.monotonic() + 5
                 # PUB/SUB may lose results while subscriptions establish.
                 while not any(packet["bbox"] == expected for packet in received):
-                    assert process.poll() is None
+                    assert process.poll() is None and visual_process.poll() is None
                     assert time.monotonic() < deadline, recording.error
                     message = writer.write("camera/front/image", rgb.tobytes())
                     source_frames[writer.sequence] = target
                     publisher.send(message)
                     time.sleep(0.03)
             process.send_signal(signal.SIGINT)
+            visual_process.send_signal(signal.SIGINT)
             stdout, stderr = process.communicate(timeout=5)
+            visual_stdout, visual_stderr = visual_process.communicate(timeout=5)
             assert process.returncode == 0, (stdout, stderr)
+            assert visual_process.returncode == 0, (visual_stdout, visual_stderr)
     finally:
         if process is not None and process.poll() is None:
             process.kill()
             process.communicate()
+        if visual_process is not None and visual_process.poll() is None:
+            visual_process.kill()
+            visual_process.communicate()
         recording.close()
     assert recording.error is None
     assert recording.path.suffix == ".mcap"

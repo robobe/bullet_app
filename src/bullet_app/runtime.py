@@ -5,7 +5,6 @@ from bullet_msgs.provenance import revisions
 from threading import Event, Thread
 import time
 
-from bullet_perception import detect_bbox
 from loguru import logger
 import zmq
 from bullet_msgs.flight import (CONFIG_TOPIC, FEEDBACK_TOPIC, MAX_FLIGHT_BYTES,
@@ -18,7 +17,7 @@ from .mission import Mission, COMMAND_PERIOD_S
 from .los_telemetry import LosTelemetryScheduler
 from .mavlink_adapter import MavlinkAdapter
 from .publisher import BboxPublisher
-from .receiver import ImageReceiver
+from .visual_receiver import VisualReceiver
 from .runtime_publisher import RuntimePublisher
 
 
@@ -28,6 +27,7 @@ TELEMETRY_POLL_TIMEOUT_MS = 50
 THREAD_JOIN_TIMEOUT_S = 3
 CONFIG_TIMEOUT_S = 3
 MAVLINK_CONTROL_ENDPOINT = "udpin:0.0.0.0:14551"
+DEFAULT_VISUAL_ENDPOINT = "tcp://127.0.0.1:5560"
 RELOADABLE_PHASES = {'READY', 'COMPLETED', 'FAULT'}
 
 
@@ -56,7 +56,7 @@ def publication_diagnostics(health):
 
 
 class DetectorRuntime:
-    """Own the detector-only image, publication, and optional display lifecycle."""
+    """Receive visual detections and publish them for recorder-only runs."""
 
     def __init__(self, options, transport):
         self.options = options
@@ -66,23 +66,24 @@ class DetectorRuntime:
         receiver = publisher = None
         try:
             publisher = BboxPublisher(self.options.bbox_endpoint)
-            receiver = ImageReceiver(self.transport["image_endpoint"], self.options.topic)
+            receiver = VisualReceiver(self.options.visual_endpoint)
             bbox = last_frame = None
             last_report = time.monotonic()
             sequence = 0
-            logger.info("Subscribed to {} on {}, SHM pixels", self.options.topic, self.transport["image_endpoint"])
+            logger.info("Subscribed to visual detections on {}", self.options.visual_endpoint)
             logger.info("Publishing tracking/front/bbox on {}", self.options.bbox_endpoint)
             while True:
                 result = receiver.poll()
                 now = time.monotonic()
                 if result is not None:
-                    metadata, image = result
-                    bbox = detect_bbox(image)
-                    publisher.publish(metadata, bbox, self.options.topic)
-                    sequence = metadata["sequence"]
+                    bbox = result['bbox']
+                    metadata = dict(result)
+                    metadata['version'] = result['schema_version']
+                    publisher.publish(metadata, bbox_tuple(bbox), result['image_topic'])
+                    sequence = result['sequence']
                     last_frame = now
-                status = "Waiting for frames" if last_frame is None else ("Live" if now - last_frame < 1 else "Stale")
-                text = f"{status} | Frame {sequence} | bbox={bbox}"
+                status = "Waiting for detections" if last_frame is None else ("Live" if now - last_frame < 1 else "Stale")
+                text = f"{status} | Frame {sequence}"
                 if now - last_report >= 1:
                     logger.info(text)
                     last_report = now
@@ -98,12 +99,17 @@ class DetectorRuntime:
         return 0
 
 
+def bbox_tuple(value):
+    return None if value is None else tuple(value[key] for key in ('x', 'y', 'width', 'height'))
+
+
 class MissionRuntime:
-    def __init__(self, transport, config, *, bbox_endpoint, image_topic, hover_check=False,
+    def __init__(self, transport, config, *, bbox_endpoint, image_topic='camera/front/image',
+                 visual_endpoint=DEFAULT_VISUAL_ENDPOINT, hover_check=False,
                  mavlink_endpoint=None, mavlink_control_endpoint=MAVLINK_CONTROL_ENDPOINT,
                  mission_config=None):
         self.transport, self.config = transport, config
-        self.bbox_endpoint, self.image_topic = bbox_endpoint, image_topic
+        self.bbox_endpoint, self.visual_endpoint, self.image_topic = bbox_endpoint, visual_endpoint, image_topic
         self.hover_check = hover_check
         self.mavlink_endpoint = mavlink_endpoint
         self.mavlink_control_endpoint = mavlink_control_endpoint
@@ -129,7 +135,7 @@ class MissionRuntime:
                                        args=(self.publisher.run,), daemon=True)
         self.publisher_thread.start()
         for name, target in (('bullet-telemetry', self._receive_telemetry),
-                             ('bullet-vision', self._vision), ('bullet-mission', self._control)):
+                             ('bullet-visual-ingress', self._visual), ('bullet-mission', self._control)):
             thread = Thread(name=name, target=self._guard, args=(target,), daemon=True)
             self.threads.append(thread)
             thread.start()
@@ -181,21 +187,39 @@ class MissionRuntime:
                 raise
             self.blackboard.record_malformed()
 
-    def _vision(self):
-        receiver = ImageReceiver(self.transport['image_endpoint'], self.image_topic)
+    def _visual(self):
+        receiver = VisualReceiver(self.visual_endpoint)
         try:
             while not self.stop.is_set():
-                result = receiver.poll()
-                if result is None:
+                packet = receiver.poll()
+                if packet is None:
                     self.stop.wait(0.002)
                     continue
-                metadata, image = result
-                bbox = detect_bbox(image)
-                metadata = dict(metadata, processing_completed_us=time.monotonic_ns() // 1000)
-                self.blackboard.write_vision((metadata, bbox), (image, bbox), time.monotonic())
-                self.blackboard.enqueue_bbox((metadata, bbox, self.image_topic), time.monotonic())
+                now = time.monotonic()
+                detection = self._enrich_visual(packet, now)
+                if detection is None:
+                    continue
+                metadata, bbox = detection
+                self.blackboard.write_vision((metadata, bbox), (None, bbox), now)
+                self.blackboard.enqueue_bbox((metadata, bbox, self.image_topic), now)
         finally:
             receiver.close()
+
+    def _enrich_visual(self, packet, now_s):
+        capture_s = packet['capture_ns'] / 1e9
+        if capture_s > now_s or now_s - capture_s > self.config.tuning.max_image_age_s:
+            return None
+        metadata = dict(packet, processing_completed_us=time.monotonic_ns() // 1000)
+        bbox = bbox_tuple(packet['bbox'])
+        if packet['schema_version'] == 2:
+            metadata['version'] = 2
+            return metadata, bbox
+        feedback = self.blackboard.latest_feedback()
+        if feedback is None or now_s - feedback.received_at_s > self.config.tuning.max_image_age_s:
+            return None
+        source = dict(feedback.value['source'], measurement_us=packet['capture_ns'] // 1000)
+        metadata.update(version=2, source=source)
+        return metadata, bbox
 
     def _control(self):
         mission = Mission(self.config, hover_check=self.hover_check)
@@ -380,6 +404,7 @@ class MissionRunner:
     def run(self):
         config = NavigatorConfig.from_yaml(self.options.mission_config)
         runtime = MissionRuntime(self.transport, config, bbox_endpoint=self.options.bbox_endpoint,
+                                 visual_endpoint=self.options.visual_endpoint,
                                  image_topic=self.options.topic, hover_check=self.options.hover_check,
                                  mavlink_endpoint=self.options.mavlink_endpoint,
                                  mavlink_control_endpoint=self.options.mavlink_control_endpoint,

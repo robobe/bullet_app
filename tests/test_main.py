@@ -10,14 +10,16 @@ import bullet_app.runtime as runtime
 def test_example_processes_frames_and_cleans_up(monkeypatch, debug):
     image = np.zeros((80, 100, 3), dtype=np.uint8)
     image[40:60, 30:50] = (0, 0, 255)
-    frames = iter([None, ({"sequence": 1, "session": "a" * 32, "capture_ns": 1}, image),
-                   ({"sequence": 2, "session": "a" * 32, "capture_ns": 2}, np.zeros_like(image))])
+    frames = iter([None, {"schema_version": 1, "sequence": 1, "session": "a" * 32,
+                          "capture_ns": 1, "image_topic": "camera/front/image",
+                          "bbox": {"x": 30, "y": 40, "width": 20, "height": 20}},
+                   {"schema_version": 1, "sequence": 2, "session": "a" * 32,
+                    "capture_ns": 2, "image_topic": "camera/front/image", "bbox": None}])
     class Receiver:
         closed = False
 
-        def __init__(self, endpoint, topic):
-            assert endpoint == "tcp://127.0.0.1:5556"
-            assert topic == "camera/front/image"
+        def __init__(self, endpoint):
+            assert endpoint == "tcp://127.0.0.1:5560"
 
         def poll(self):
             try:
@@ -42,7 +44,7 @@ def test_example_processes_frames_and_cleans_up(monkeypatch, debug):
             Publisher.closed = True
 
     monkeypatch.setattr(runtime, "BboxPublisher", Publisher)
-    monkeypatch.setattr(runtime, "ImageReceiver", Receiver)
+    monkeypatch.setattr(runtime, "VisualReceiver", Receiver)
     monkeypatch.setattr(application, "load_transport", lambda path: {"image_endpoint": "tcp://127.0.0.1:5556"})
     monkeypatch.setattr(runtime.time, "sleep", lambda seconds: None)
     args = ["--transport-config", "unused.json"] + (["--debug"] if debug else [])

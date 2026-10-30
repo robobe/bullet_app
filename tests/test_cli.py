@@ -3,14 +3,15 @@ from pathlib import Path
 import pytest
 
 from bullet_app.cli import (AppOptions, CliParser, DEFAULT_BBOX_ENDPOINT, DEFAULT_IMAGE_TOPIC,
-                            DEFAULT_MAVLINK_ENDPOINT)
+                            DEFAULT_MAVLINK_ENDPOINT, DEFAULT_VISUAL_ENDPOINT)
 
 
 def test_parser_returns_options_without_starting_application():
     options = CliParser().parse(["--transport-config", "transport.json"])
 
     assert options == AppOptions(Path("transport.json"), DEFAULT_IMAGE_TOPIC, False,
-                                 DEFAULT_BBOX_ENDPOINT, None, False, DEFAULT_MAVLINK_ENDPOINT)
+                                 DEFAULT_BBOX_ENDPOINT, None, False, DEFAULT_VISUAL_ENDPOINT,
+                                 DEFAULT_MAVLINK_ENDPOINT)
 
 
 def test_parser_keeps_mission_options():
@@ -21,7 +22,8 @@ def test_parser_keeps_mission_options():
     ])
 
     assert options == AppOptions(Path("transport.json"), "camera/rear/image", True,
-                                 "tcp://127.0.0.1:6000", Path("mission.yaml"), True)
+                                 "tcp://127.0.0.1:6000", Path("mission.yaml"), True,
+                                 DEFAULT_VISUAL_ENDPOINT)
 
 
 def test_parser_accepts_optional_mavlink_endpoint():

@@ -5,8 +5,9 @@ projects share `../.venv` and `../uv.lock`; run uv commands with the
 workspace flags below to retain every project and optional dependency.
 
 Standalone Python 3.12+ uv application, intended to own the drone application
-state machine. This version only runs the camera → red detector → bounding-box
-publisher pipeline. Flight commands and state transitions are deferred.
+state machine. Camera capture and perception are provided by the sibling
+`bullet_visual` process; this app consumes its detections and owns mission
+control and recorder-facing publication.
 
 Keep `bullet_app`, `los_tracking`, `bullet_msgs`, `mcap_bagger`, and `bullet_render`
 as sibling folders under `~/projects/bullet`.
@@ -24,10 +25,8 @@ The Bullet workspace includes **Bullet: App (debug)**. **Bullet: Physics + rende
 logger. Click Start in Godot to produce images and start episode recording.
 Use Bullet View in Local mode for the camera and bounding-box preview.
 
-The receiver moved here from `los_tracking`; it uses `bullet_msgs.FrameReader`
-for exact topic matching, SHM validation, private BGR copies, duplicate/stale
-skips, row padding, and publisher restarts. The reusable image detector now lives in
-the `bullet_perception` workspace package; its image-to-bbox behavior is unchanged. `los_tracking`
+The reusable image detector lives in the `bullet_perception` workspace package;
+`bullet_visual` owns capture, SHM/OpenCV adaptation, and detection. `los_tracking`
 now owns the separate bbox/barometer/attitude-to-RC library. This live app still
 runs detection and recording only; sensor reception and flight-command transport
 are deferred. See the [navigator calling contract](../los_tracking/README.md).
@@ -36,8 +35,10 @@ The former live example also moved here.
 ## Input and output
 
 `--transport-config` is required. `--topic` defaults to `camera/front/image`.
-`--bbox-endpoint` defaults to `tcp://127.0.0.1:5558`; the app binds a PUB socket
-and MCAP connects. It must differ from the renderer/physics/control endpoints.
+`--visual-endpoint` defaults to `tcp://127.0.0.1:5560`; the app subscribes to
+the `bullet_visual` detection publisher. `--bbox-endpoint` defaults to
+`tcp://127.0.0.1:5558`; the app binds a PUB socket and MCAP connects. Both
+endpoints must differ from the renderer/physics/control endpoints.
 When changing this port, also change the bbox topic's `endpoint` in
 `../bullet_render/configs/recorder.yaml`.
 
@@ -90,9 +91,10 @@ uses arrival time; source identity can match a bbox to a descriptor but recorded
 RawImage messages do not preserve that identity, so exact MCAP image association
 is not guaranteed.
 
-No new frame means no new result. The app waits for the renderer and resumes on
-restart. `--debug` enables detector diagnostics; camera rendering is owned by
-Bullet View. A no-target frame clears the bbox. Ctrl+C releases sockets and
+No new detection means no new result. Start `bullet_visual` with one of its
+`config/{zmq,usb,mipi}.yaml` files before the app. `--debug` enables ingress
+diagnostics; camera rendering is owned by Bullet View. A no-target frame clears
+the bbox. Ctrl+C releases sockets and
 mappings. Malformed input or bind failures exit with a diagnostic and nonzero
 code.
 
@@ -114,12 +116,12 @@ image-to-detection-to-MCAP round trip using synthetic images.
 
 ## Red detector ownership
 
-`from bullet_perception import detect_bbox` accepts a nonempty H×W×3 uint8
+`bullet_visual` calls `from bullet_perception import detect_bbox`, which accepts a nonempty H×W×3 uint8
 BGR array and returns `(x, y, width, height)` or `None`, preserving the input.
 The package selects the largest red contour using HSV hue 0–10 or 170–180,
 saturation >=100, value >=80, 3×3 opening, contour area >=4 and width/height
->=3 pixels. `bullet_app` consumes this generic detector without owning the
-perception implementation.
+>=3 pixels. `bullet_app` consumes the resulting schema packet and does not own
+the perception implementation.
 
 ## App-owned flight mission
 
