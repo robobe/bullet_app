@@ -28,8 +28,10 @@ Configure Betaflight MSP control as TCP or serial from the mission YAML, while k
 
 ## Status
 
-Pending.
+Implemented and verified.
 
-## Implementation commit
+## Implementation commits
 
-Pending.
+- Bullet App: `bb42c55`
+- LOS Tracking: `ef75583`
+- Workspace mission profiles: `05a0076`

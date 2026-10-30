@@ -19,4 +19,4 @@
 | [0015 Wind-robust optical LOS recovery](0015-optical-recovery-wind-braking.md) | Preserve bounded optical roll and vertical corrections during visual recovery under wind. | Implemented; tests passed | `abc7814` (`los_tracking`) |
 | [0016 Bullet Perception Library](0016-bullet-perception-library.md) | Extract ndarray-to-bounding-box detection into a reusable workspace package. | Pending | Pending |
 | [0017 Yaw overshoot tuning](0017-yaw-overshoot-tuning.md) | Reduce heavy-quad Betaflight first-approach yaw overshoot through a lower proportional gain. | Implemented | `3db6fbf` |
-| [0018 Configurable Betaflight connection](0018-configurable-betaflight-connection.md) | Configure Betaflight MSP TCP or serial control from the mission YAML, independently of MAVLink. | Pending | — |
+| [0018 Configurable Betaflight connection](0018-configurable-betaflight-connection.md) | Configure Betaflight MSP TCP or serial control from the mission YAML, independently of MAVLink. | Implemented | `bb42c55` (`ef75583`, `05a0076`) |
