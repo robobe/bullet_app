@@ -220,7 +220,7 @@ class MissionRuntime:
                         applied_platform_config = inputs.config.value
                         if inputs.config.value.get('backend') == 'betaflight' and msp is None:
                             from .msp_flight import MspFlight
-                            msp = MspFlight()
+                            msp = MspFlight(connection=self.config.control.connection)
                             msp.start()
                         last_config = inputs.config.received_at_s
                     if self.mavlink is not None and self.mavlink.take_reload_request():
@@ -235,8 +235,16 @@ class MissionRuntime:
                                 new_mission = Mission(new_config, hover_check=self.hover_check)
                                 if applied_platform_config is not None:
                                     new_mission.configure(applied_platform_config)
+                                if msp is not None and new_config.control != self.config.control:
+                                    msp.close()
+                                    msp = None
                                 mission = new_mission
                                 self.config = new_config
+                                if (msp is None and applied_platform_config is not None
+                                        and applied_platform_config.get('backend') == 'betaflight'):
+                                    from .msp_flight import MspFlight
+                                    msp = MspFlight(connection=self.config.control.connection)
+                                    msp.start()
                                 self.mavlink.reply_reload(True, 'mission profile reloaded')
                             except (OSError, ValueError, TypeError) as error:
                                 self.mavlink.reply_reload(False, f'profile reload failed: {error}')

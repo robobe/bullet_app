@@ -4,7 +4,10 @@ from types import SimpleNamespace
 import time
 
 from bullet_app.msp_flight import (ALTITUDE_PERIOD_S, ATTITUDE_PERIOD_S,
-                                   MspFlight, SAFE_RC_COMMAND, STATUS_PERIOD_S)
+                                   MspFlight, SAFE_RC_COMMAND, STATUS_PERIOD_S,
+                                   transport_for_connection)
+from los_tracking import ControlConnection
+from msp_link.transport import SerialTransport, TcpTransport
 from msp_link.commands import ALTITUDE, ATTITUDE, STATUS
 
 
@@ -21,6 +24,21 @@ def flight_with_client():
                            update=lambda channels: setattr(client, 'channels', channels)),
         request_metrics=lambda command, now: (metrics_calls.append(command) or {}))
     return MspFlight(client), client, metrics_calls
+
+
+def test_transport_for_tcp_connection():
+    transport = transport_for_connection(ControlConnection(transport='tcp', host='10.0.0.4', port=6000))
+
+    assert isinstance(transport, TcpTransport)
+    assert (transport.host, transport.port) == ('10.0.0.4', 6000)
+
+
+def test_transport_for_serial_connection():
+    transport = transport_for_connection(ControlConnection(
+        transport='serial', path='/dev/ttyUSB1', baud_rate=921600))
+
+    assert isinstance(transport, SerialTransport)
+    assert (transport.device, transport.baudrate) == ('/dev/ttyUSB1', 921600)
 
 
 def test_scheduler_requests_all_telemetry_and_snapshot_includes_altitude():

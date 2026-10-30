@@ -46,6 +46,35 @@ and barometric altitude for mission runs by default. Override it with another
 `pymavlink` output connection string. It is telemetry-only and does not accept
 MAVLink commands.
 
+Betaflight MSP control is configured separately in the mission YAML. SITL uses
+TCP by default:
+
+```yaml
+control:
+  backend: betaflight
+  target: sitl
+  connection:
+    transport: tcp
+    host: 127.0.0.1
+    port: 5761
+```
+
+For a hardware flight controller, use the serial transport and its device baud:
+
+```yaml
+control:
+  backend: betaflight
+  target: hardware
+  connection:
+    transport: serial
+    path: /dev/ttyUSB0
+    baud_rate: 115200
+```
+
+The connection block controls MSP RC/attitude/altitude traffic only. It does not
+change the independent MAVLink telemetry endpoints above. Internal-control
+profiles do not open an MSP connection.
+
 Every processed frame emits exactly two ZMQ parts: UTF-8 topic
 `tracking/front/bbox` and a JSON payload using `bullet_msgs:bbox.json`:
 

@@ -1,10 +1,12 @@
 """Application-owned MSP polling and firmware-frame conversion, not physics IO."""
 import heapq
+from math import cos, sin
 from threading import Event, Lock, Thread
 import time
 
-from msp_link import Client, FlightCommands, TcpTransport, MspError
+from msp_link import Client, FlightCommands, MspError
 from msp_link.commands import ALTITUDE, ATTITUDE, STATUS
+from msp_link.transport import SerialTransport, TcpTransport
 from msp_link.rc import pack_rc
 
 STATUS_PERIOD_S = .1
@@ -25,6 +27,25 @@ SAFE_RC_COMMAND = (
     RC_NEUTRAL_PWM, RC_NEUTRAL_PWM, RC_MIN_PWM, RC_NEUTRAL_PWM,
     RC_MIN_PWM, RC_MAX_PWM,
 ) + (RC_MIN_PWM,) * (RC_CHANNEL_COUNT - RC_AETR_CHANNEL_COUNT - RC_ARM_MODE_CHANNEL_COUNT)
+
+
+def body_to_world(roll, pitch, yaw):
+    """Convert MAVLink FRD Euler angles to a Bullet-compatible XYZW quaternion."""
+    half_roll, half_pitch, half_yaw = roll / 2, pitch / 2, yaw / 2
+    cr, sr = cos(half_roll), sin(half_roll)
+    cp, sp = cos(half_pitch), sin(half_pitch)
+    cy, sy = cos(half_yaw), sin(half_yaw)
+    return (sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy)
+
+
+def transport_for_connection(connection):
+    """Build the configured MSP transport without coupling it to MAVLink."""
+    if connection.transport == 'tcp':
+        return TcpTransport(connection.host, connection.port)
+    return SerialTransport(connection.path, connection.baud_rate)
 
 
 class MspScheduler:
@@ -149,8 +170,11 @@ class MspScheduler:
 
 
 class MspFlight:
-    def __init__(self, client=None):
-        self.client = client if client is not None else Client(TcpTransport())
+    def __init__(self, client=None, *, connection=None):
+        if client is not None and connection is not None:
+            raise ValueError('provide either connection or client, not both')
+        self.client = client if client is not None else Client(
+            transport_for_connection(connection) if connection is not None else TcpTransport())
         self.commands = FlightCommands(self.client)
         self.scheduler = MspScheduler(self.client, self.commands)
 
