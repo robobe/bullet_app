@@ -25,8 +25,8 @@ Use visual stability only. Require at least 60% positive size-growth steps. Keep
 
 ## Status
 
-Pending
+Implemented
 
 ## Implementation commit
 
-Pending
+`504fc99` (`los_tracking`), `4241615` (`bullet_app`), `744968a` (workspace profiles)
