@@ -104,6 +104,7 @@ def test_heavy_quad_profiles_use_aggressive_takeoff_controller(profile):
 def test_heavy_quad_profiles_use_aggressive_lateral_tracking(profile):
     config = NavigatorConfig.from_yaml(ROOT / profile)
     assert config.tuning.approach_pitch_rad == pytest.approx(radians(8.0))
+    assert config.tuning.roll_limit_rad == pytest.approx(radians(30.0))
     assert config.tuning.roll_slew_rad_s == pytest.approx(radians(60.0))
     assert config.tuning.azimuth_kp == pytest.approx(2.2)
     assert config.tuning.azimuth_kd_s == pytest.approx(2.0)

@@ -62,6 +62,24 @@ def test_visible_target_skips_search_and_search_telemetry_is_inactive():
     assert not snapshot(m, now_s=1000 + (step + 1) / 240, sequence=1)['active']
 
 
+def test_los_roll_stays_level_during_yaw_center_then_tracks_azimuth_error():
+    m, step = after_hover()
+    centered = (300, 250, 25, 25)
+    for step in range(step + 1, step + 180):
+        rc = tick(m, step, bbox=centered)
+        if m.phase == 'LOS_APPROACH':
+            break
+    assert m.phase == 'LOS_APPROACH'
+    assert rc['channels'][:2] == [1500, 1500]
+
+    roll_channels = []
+    for offset in range(1, 8):
+        rc = tick(m, step + offset, bbox=(340, 250, 25, 25))
+        roll_channels.append(rc['channels'][0])
+    assert m.nav_result.diagnostics.requested_roll_rad != pytest.approx(0.0)
+    assert any(channel != 1500 for channel in roll_channels)
+
+
 @pytest.mark.parametrize('bbox,source_change,reason', [
     ((0, 200, 20, 20), {}, 'clipped_target'),
     ((10, 230, 10, 10), {}, 'bearing_outside_envelope'),
@@ -213,6 +231,12 @@ def test_center_rate_sign_deadband_and_saturation(error_px):
         assert rate * error_px < 0  # Positive image X must turn right (negative body yaw).
     if abs(error_px) == 200:
         assert abs(rate) == SEARCH_RATE_RAD_S
+
+
+def test_center_rate_uses_reduced_gain_for_yaw_overshoot():
+    from bullet_app.search import centering_command
+    _, rate = centering_command((350, 230, 20, 20), mission().config.camera)
+    assert rate == pytest.approx(-0.124355, abs=1e-5)
 
 
 def test_off_center_visible_target_keeps_centering_and_corrects_overshoot():

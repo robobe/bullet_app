@@ -21,3 +21,4 @@
 | [0017 Yaw overshoot tuning](0017-yaw-overshoot-tuning.md) | Reduce heavy-quad Betaflight first-approach yaw overshoot through a lower proportional gain. | Implemented | `3db6fbf` |
 | [0018 Configurable Betaflight connection](0018-configurable-betaflight-connection.md) | Configure Betaflight MSP TCP or serial control from the mission YAML, independently of MAVLink. | Implemented | `bb42c55` (`ef75583`, `05a0076`) |
 | [0019 MAVLink AGL telemetry](0019-mavlink-agl.md) | Publish physics rangefinder AGL over DISTANCE_SENSOR and retain it in flight feedback/MCAP. | Implemented; focused tests passed | `7a5774f` |
+| [0020 LOS roll alignment](0020-los-roll-alignment.md) | Preserve yaw-first centering and verify roll correction during LOS tracking. | Pending | Pending |
