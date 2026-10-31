@@ -17,7 +17,7 @@ None. Existing mission diagnostics remain the verification surface.
 
 ## Verification
 
-Focused search/mission tests: 51 passed. Full `bullet_app` suite: 153 passed. Implementation commit is pending.
+Focused search/mission tests: 51 passed. Full `bullet_app` suite: 153 passed. Implementation commit: `d58580a`.
 
 ## Scope/defaults
 
@@ -25,8 +25,8 @@ Use yaw first for image centering. Use the heavy Betaflight profile's existing 3
 
 ## Status
 
-Pending
+Implemented
 
 ## Implementation commit
 
-Pending
+`d58580a`
