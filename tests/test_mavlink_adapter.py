@@ -3,6 +3,7 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
+from pymavlink import mavutil
 
 from bullet_app.blackboard import RuntimeBlackboard
 from bullet_app.mavlink_adapter import FEEDBACK_STALE_S, MavlinkAdapter, mavlink_attitude
@@ -14,6 +15,7 @@ class Mav:
         self.heartbeats = []
         self.attitudes = []
         self.altitudes = []
+        self.distance_sensors = []
         self.statuses = []
         self.named_values = []
         self.acks = []
@@ -26,6 +28,9 @@ class Mav:
 
     def altitude_send(self, *args):
         self.altitudes.append(args)
+
+    def distance_sensor_send(self, *args):
+        self.distance_sensors.append(args)
 
     def statustext_send(self, *args):
         self.statuses.append(args)
@@ -53,6 +58,7 @@ class Connection:
 def packet(*, time_us=1_000_000, altitude=3., orientation=(0., 0., 0., 1.), armed=True,
            state='running'):
     return dict(source=dict(measurement_us=time_us), barometer_altitude_m=altitude,
+                rangefinder={'distance_cm': 275., 'valid': True},
                 orientation_xyzw=list(orientation), armed=armed, state=state)
 
 
@@ -84,6 +90,18 @@ def test_adapter_uses_latest_blackboard_feedback_for_standard_messages():
     assert connection.mav.altitudes[0][0] == 1_000_000
     assert connection.mav.altitudes[0][3] == 3.
     assert all(isnan(value) for index, value in enumerate(connection.mav.altitudes[0]) if index != 0 and index != 3)
+    assert connection.mav.distance_sensors[0][3] == 275
+    assert connection.mav.distance_sensors[0][6] == mavutil.mavlink.MAV_SENSOR_ROTATION_PITCH_270
+
+
+def test_adapter_marks_invalid_rangefinder_with_mavlink_sentinel():
+    board = RuntimeBlackboard()
+    value = packet()
+    value['rangefinder'] = {'distance_cm': None, 'valid': False}
+    board.write_feedback(value, 10.)
+    publisher, connection = adapter(board)
+    publisher._send_telemetry(value)
+    assert connection.mav.distance_sensors[0][3] == 65535
 
 
 def test_adapter_omits_stale_feedback_and_missing_altitude():

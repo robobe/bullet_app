@@ -19,6 +19,9 @@ SYSTEM_ID = 1
 COMPONENT_ID = mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
 UNKNOWN_FLOAT = float('nan')
 BBOX_NAMED_VALUES = ('BBOX_VALID', 'BBOX_X', 'BBOX_Y', 'BBOX_W', 'BBOX_H')
+RANGEFINDER_MIN_DISTANCE_CM = 1
+RANGEFINDER_MAX_DISTANCE_CM = 5000
+RANGEFINDER_INVALID_CM = 65535
 
 
 def mavlink_attitude(orientation_xyzw):
@@ -134,6 +137,18 @@ class MavlinkAdapter:
         if altitude is not None:
             self.connection.mav.altitude_send(time_us, UNKNOWN_FLOAT, UNKNOWN_FLOAT, altitude,
                                               UNKNOWN_FLOAT, UNKNOWN_FLOAT, UNKNOWN_FLOAT)
+        rangefinder = feedback.get('rangefinder')
+        if rangefinder is not None:
+            distance_cm = rangefinder['distance_cm'] if rangefinder['valid'] else None
+            if distance_cm is None:
+                distance_cm = RANGEFINDER_INVALID_CM
+            else:
+                distance_cm = min(RANGEFINDER_INVALID_CM - 1, max(0, round(distance_cm)))
+            self.connection.mav.distance_sensor_send(
+                time_us // 1000 % 2**32, RANGEFINDER_MIN_DISTANCE_CM,
+                RANGEFINDER_MAX_DISTANCE_CM, distance_cm,
+                mavutil.mavlink.MAV_DISTANCE_SENSOR_LASER, 0,
+                mavutil.mavlink.MAV_SENSOR_ROTATION_PITCH_270, 0)
 
     def _send_bbox(self, now_s):
         vision = self.blackboard.latest_vision()
