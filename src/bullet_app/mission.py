@@ -228,10 +228,16 @@ class Mission:
                     if not self.hold.ready(now_s):
                         attitude = self.last_input.attitude
                         attitude_age = None if attitude is None else now_s - attitude.timestamp_s
-                        if attitude_age is None or not 0 <= attitude_age <= self.config.tuning.max_attitude_age_s:
-                            self.fail('attitude_stale')
-                        else:
-                            self.fail('barometer_stale')
+                        reason = ('attitude_stale' if attitude_age is None or not 0 <= attitude_age <= self.config.tuning.max_attitude_age_s
+                                  else 'barometer_stale')
+                        barometer = self.last_input.barometer
+                        self.diagnostics['navigation_trigger'] = dict(
+                            reason=reason, condition=f'{reason.removesuffix("_stale")}_age_s missing or outside [0, max_{reason.removesuffix("_stale")}_age_s]',
+                            measurements=dict(attitude_age_s=attitude_age,
+                                              barometer_age_s=None if barometer is None else now_s - barometer.timestamp_s),
+                            parameters=dict(max_attitude_age_s=self.config.tuning.max_attitude_age_s,
+                                            max_barometer_age_s=self.config.tuning.max_barometer_age_s))
+                        self.fail(reason)
                     elif self.phase.startswith('LOS_'):
                         target = self._target(detection, now_s)
                         result = self.navigator.update(NavigationInput(attitude=self.last_input.attitude,

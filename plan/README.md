@@ -23,3 +23,4 @@
 | [0019 MAVLink AGL telemetry](0019-mavlink-agl.md) | Publish physics rangefinder AGL over DISTANCE_SENSOR and retain it in flight feedback/MCAP. | Implemented; focused tests passed | `7a5774f` |
 | [0020 LOS roll alignment](0020-los-roll-alignment.md) | Preserve yaw-first centering and verify roll correction during LOS tracking. | Implemented; tests passed | `d58580a` |
 | [0021 TTC stability gating](0021-ttc-stability-gating.md) | Gate noisy TTC estimates before descent-feasibility control. | Implemented; tests passed | `504fc99`, `4241615`, `744968a` |
+| [0022-recorded-issue-triggers](0022-recorded-issue-triggers.md) | Explain tracking triggers from recorded measurements and limits. | Pending | Pending |

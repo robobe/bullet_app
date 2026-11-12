@@ -478,3 +478,23 @@ def test_sensor_diagnostics_measure_feedback_rate_and_age():
     assert diagnostics['feedback_age_s'] == pytest.approx(0, abs=1e-6)
     assert diagnostics['attitude_age_s'] == pytest.approx(0, abs=1e-6)
     assert diagnostics['barometer_age_s'] == pytest.approx(0, abs=1e-6)
+
+
+def test_mission_records_sensor_gate_trigger_and_serializes_it(monkeypatch):
+    import json
+    from bullet_msgs import schema_bytes
+    from jsonschema import validate
+
+    m = mission()
+    m.observe(feedback(1, 1000., 4., armed=True))
+    m.running_seen = True
+    m.phase = 'LOS_APPROACH'
+    monkeypatch.setattr(m.hold, 'ready', lambda now: False)
+    m.last_input = replace(m.last_input, attitude=None)
+    m.tick(now_s=1000.)
+    packet = m.status(1000.)
+    trigger = packet['diagnostics']['navigation_trigger']
+    assert trigger['reason'] == 'attitude_stale'
+    assert trigger['measurements']['attitude_age_s'] is None
+    assert trigger['parameters']['max_attitude_age_s'] == m.config.tuning.max_attitude_age_s
+    validate(json.loads(json.dumps(packet, allow_nan=False)), json.loads(schema_bytes('mission.json')))
